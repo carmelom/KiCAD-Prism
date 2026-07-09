@@ -23,6 +23,7 @@ import re
 from typing import Callable, Dict, List, Optional
 
 from app.services.schematic_hierarchy_service import resolve_from_content
+from app.services.schematic_pin_fix_service import fix_colliding_pin_numbers
 
 SheetLoader = Callable[[str], Optional[str]]
 
@@ -177,7 +178,12 @@ def build_flattened_blobs(
         blobs.append({
             "filename": filename,
             "sheetPath": sheet_path,
-            "content": _rewrite(text, reference_by_symbol, sheetfile_by_sheet),
+            # Repair within-symbol pin-number collisions (empty/duplicate pin
+            # numbers that would otherwise collapse and drop pins in the viewer)
+            # after the per-instance reference/sheetfile rewrite.
+            "content": fix_colliding_pin_numbers(
+                _rewrite(text, reference_by_symbol, sheetfile_by_sheet)
+            ),
             "isRoot": is_root,
         })
 

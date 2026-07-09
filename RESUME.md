@@ -3,7 +3,7 @@
 > Durable standards/architecture live in `CLAUDE.md`. This file tracks live status,
 > decisions, open items, and the next task. Update it at the end of every iteration.
 
-Last updated: 2026-07-09
+Last updated: 2026-07-09 (pin-collision fix integrated + tested)
 
 ## Goal (from CLAUDE.md)
 
@@ -213,8 +213,8 @@ optional typing in `ecad-viewer.d.ts` are kept (harmless; stable bundle has cros
 **Known renderer limitations (re-accepted, deferred to a dedicated visual-iteration effort):**
 - Dashed/dotted lines render solid.
 - Table cell content not rendered (borders only).
-- Symbols with empty/duplicate pin numbers (e.g. `Lakeshore_TempCtrl` / "Model 336") drop
-  pins — `pin_by_number("")` collision in the parser.
+- ~~Symbols with empty/duplicate pin numbers drop pins~~ — **fixed backend-side**, see
+  "Fixed (bughunt) — within-symbol pin-number collisions" below.
 - Bezier + DNP-marker improvements from `b8d8019` are not present in the stable bundle.
 
 **For a future renderer effort:** the patched upstream clone is at sibling dir
@@ -228,6 +228,35 @@ empty-number pin resolution (`schematic.ts` `pins_in_order`/`pin_by_index`/`decl
 `[prism-pin-debug]` console logs. Do it with live visual verification in the target browser
 before re-vendoring. The `parser.worker.js` module-worker + lifecycle races (Firefox) must
 be resolved before any future re-vendor.
+
+## Fixed (bughunt) — within-symbol pin-number collisions
+
+The vendored viewer resolves each placed pin's geometry/name via
+`lib_symbol.pin_by_number(pin.number)`, backed by a map keyed on the number *text*.
+Symbols whose pins share a number (most commonly every pin empty `""`, e.g.
+`Lakeshore_TempCtrl` "Model 336") collapse in that map, so all but one colliding pin
+stack at one spot and the rest visually disappear.
+
+Chosen fix (backend-only, no viewer change, mirrors the flatten approach):
+- `backend/app/services/schematic_pin_fix_service.py` — `fix_colliding_pin_numbers(text)`:
+  for every embedded lib symbol with a within-symbol number collision, renumbers ALL its
+  pins to unique synthetic values (`"1"`, `"2"`, …), forces `(pin_numbers (hide yes))` on
+  that symbol so the synthetic numbers aren't drawn, and renumbers the matching placed
+  instance `(pin …)` refs by declaration order. Order-preserving bijection is sufficient
+  because a pin's position/name always come from the library definition, never the
+  instance. Cost (accepted): any genuine number on an affected symbol is hidden too
+  (affected symbols are overwhelmingly unnumbered). Scoped, offset-preserving string edits;
+  stdlib-only, framework-free (host-testable). No-op when no `lib_symbols` block or no
+  collision.
+- Wired into `schematic_flatten_service.build_flattened_blobs` — each blob's `content` is
+  now `fix_colliding_pin_numbers(_rewrite(...))`, so every served instance blob is repaired.
+  Both `/schematic/flattened` modes (commit + working-tree) funnel through
+  `build_flattened_blobs`, so both are covered.
+- `backend/tests/test_schematic_pin_fix_service.py` — 8 tests, all green (empty-number
+  collision → renumber + hidden, distinct numbers untouched, no-lib_symbols no-op, existing
+  `(pin_numbers …)` node forced hidden, placed-instance renumbering). Existing 5 flatten
+  tests still green. `py_compile` clean on both services.
+- **Requires rebuilding the backend to apply.**
 
 ## Deferred (bughunt later — user's call)
 
