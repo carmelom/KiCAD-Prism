@@ -12,11 +12,14 @@ This document tracks the current upstream sync reference for the vendored visual
 
 `frontend/public/ecad-viewer.js` is now built from `a85abd4` **plus** two local
 patches, not a plain upstream artifact. Base + patches live in the sibling clone
-`../ecad-viewer` on branch `prism/render-fixes` (commit `11ad3d1`), forked from
+`../ecad-viewer` on branch `prism/render-fixes` (commit `6c4bf54`), forked from
 `a85abd4fb31a493fc1bec9fb1908741043fd7ff5` (recovered via the GitHub API — the
 short SHA was rewritten off upstream `main` by the later worker-pool migration).
 
 Patches (schematic renderer only):
+- **Root-sheet landing** — `Project.get_first_page` prefers a blob literally named
+  `root.kicad_sch`. PRISM's flattened feed always names the top-level sheet that, so
+  the viewer opens on the true root instead of a name-sorted subsheet.
 - **Dashed/dotted strokes** — `determine_stroke` maps KiCad stroke types to canvas
   dash patterns, threaded through `Polyline`/painters/`DrawCommand`.
 - **Table cell rendering** — new `Table`/`TableCell` parser classes + `TablePainter`

@@ -217,7 +217,13 @@ stable `a85abd4` source** (its short SHA was rewritten off upstream `main` by th
 worker-pool migration; fetched by full SHA via the GitHub API) and backported two
 fixes onto it. Firefox-safe because a85abd4 predates the worker pool.
 
-- Sibling clone `../ecad-viewer`, branch `prism/render-fixes` (commit `11ad3d1`):
+- Also: **project pages now land on the schematic visualizer by default** (not the
+  README) — `frontend/src/pages/ProjectDetailPage.tsx` `activeSection` defaults to
+  `"visualizers"`.
+- Sibling clone `../ecad-viewer`, branch `prism/render-fixes` (commit `6c4bf54`):
+  - **Root-sheet landing** — `Project.get_first_page` prefers the `root.kicad_sch`
+    blob, so a project opens on its true top-level sheet (the viewer's own heuristic
+    otherwise picked a name-sorted subsheet, e.g. lab-map opened on `866_split_board`).
   - **Dashed/dotted strokes** — `determine_stroke` → canvas dash patterns, threaded
     through `Polyline`/rect+polyline+bezier painters/`DrawCommand`.
   - **Table cells** — new `Table`/`TableCell` parser classes + `TablePainter`
