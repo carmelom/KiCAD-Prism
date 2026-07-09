@@ -217,11 +217,12 @@ stable `a85abd4` source** (its short SHA was rewritten off upstream `main` by th
 worker-pool migration; fetched by full SHA via the GitHub API) and backported two
 fixes onto it. Firefox-safe because a85abd4 predates the worker pool.
 
-- Sibling clone `../ecad-viewer`, branch `prism/render-fixes` (commit `43e0e8a`):
+- Sibling clone `../ecad-viewer`, branch `prism/render-fixes` (commit `11ad3d1`):
   - **Dashed/dotted strokes** — `determine_stroke` → canvas dash patterns, threaded
     through `Polyline`/rect+polyline+bezier painters/`DrawCommand`.
   - **Table cells** — new `Table`/`TableCell` parser classes + `TablePainter`
-    (border, separators, per-cell text via `SchText`), in a85abd4's combinator idiom.
+    (border, separators, per-cell text via `SchText`, word-wrapped to the cell width
+    with the font's `break_lines`), in a85abd4's combinator idiom.
   - Excludes the empty-pin fallback (backend handles it now) and the b8d8019 debug logs.
 - Built in docker (a85abd4 is a **single-package** repo — build cmd differs from the
   old b8d8019 `packages/*` command; see `docs/ECAD_VIEWER_SYNC_NOTES.md`), tsc 0 errors.
