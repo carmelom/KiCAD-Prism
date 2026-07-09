@@ -3,7 +3,7 @@
 > Durable standards/architecture live in `CLAUDE.md`. This file tracks live status,
 > decisions, open items, and the next task. Update it at the end of every iteration.
 
-Last updated: 2026-07-09 (pin-collision fix integrated + tested)
+Last updated: 2026-07-09 (renderer fidelity: dashed lines + table cells — verified in Chrome + Firefox)
 
 ## Goal (from CLAUDE.md)
 
@@ -210,9 +210,34 @@ from git (`frontend/public/{ecad-viewer,glyph-full,3d-viewer}.js`) and deleted t
 it was confirmed working with the stable bundle. Cross-probe guards in `visualizer.tsx` /
 optional typing in `ecad-viewer.d.ts` are kept (harmless; stable bundle has cross-probe).
 
-**Known renderer limitations (re-accepted, deferred to a dedicated visual-iteration effort):**
-- Dashed/dotted lines render solid.
-- Table cell content not rendered (borders only).
+## Renderer fidelity (ecad-viewer) — dashed lines + table cells (branch `feat/renderer-fidelity`)
+
+Rather than re-vendor the destabilising b8d8019 bundle, we **recovered the exact
+stable `a85abd4` source** (its short SHA was rewritten off upstream `main` by the
+worker-pool migration; fetched by full SHA via the GitHub API) and backported two
+fixes onto it. Firefox-safe because a85abd4 predates the worker pool.
+
+- Sibling clone `../ecad-viewer`, branch `prism/render-fixes` (commit `43e0e8a`):
+  - **Dashed/dotted strokes** — `determine_stroke` → canvas dash patterns, threaded
+    through `Polyline`/rect+polyline+bezier painters/`DrawCommand`.
+  - **Table cells** — new `Table`/`TableCell` parser classes + `TablePainter`
+    (border, separators, per-cell text via `SchText`), in a85abd4's combinator idiom.
+  - Excludes the empty-pin fallback (backend handles it now) and the b8d8019 debug logs.
+- Built in docker (a85abd4 is a **single-package** repo — build cmd differs from the
+  old b8d8019 `packages/*` command; see `docs/ECAD_VIEWER_SYNC_NOTES.md`), tsc 0 errors.
+- Vendored: only `frontend/public/ecad-viewer.js` changed (glyph-full byte-identical;
+  3d-viewer kept as committed — unaffected by our changes).
+- **Requires a frontend rebuild.** Fixture with both features: `spec/amplified-photodiode/
+  board/transimpedance_amplifier.kicad_sch` (has a `(table …)`); dashed strokes appear
+  on sheet borders / graphic boxes.
+- **STATUS: VERIFIED in Chrome + Firefox (2026-07-09).** Both dashed lines and table
+  cells render correctly in both browsers. (Firefox initially showed stale output until
+  a hard refresh — the stale-chunk fragility in deferred item #2 below; no code issue.)
+  If a table ever looks misaligned, the knobs are the cell text anchor (top-left +
+  margins) and separator spacing in `TablePainter`
+  (`../ecad-viewer/src/viewers/schematic/painter.ts`).
+
+**Previously known renderer limitations (deferred to a dedicated visual-iteration effort):**
 - ~~Symbols with empty/duplicate pin numbers drop pins~~ — **fixed backend-side**, see
   "Fixed (bughunt) — within-symbol pin-number collisions" below.
 - Bezier + DNP-marker improvements from `b8d8019` are not present in the stable bundle.
