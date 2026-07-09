@@ -294,11 +294,19 @@ Chosen fix (backend-only, no viewer change, mirrors the flatten approach):
    `<Suspense fallback={null}>` with **no error boundary**, so any chunk-load failure
    (e.g. stale cache after redeploy) unmounts the whole app to black. Add an error
    boundary. (The earlier black page was resolved by a hard refresh = stale chunk.)
+   **Recurred 2026-07-09:** after the renderer re-vendor, Firefox showed stale output
+   until Ctrl+Shift+R — same stale-chunk fragility. Now the strongest candidate for the
+   next bughunt.
 
 ## Next task
 
-- Container build + functional verification of the full Phase 1 + Phase 2 flow.
-- Then the deferred bughunt items above (when the user is ready).
+- Renderer fidelity (dashed lines + table cells) is DONE, verified, and pushed on
+  `feat/renderer-fidelity` (see the render-fidelity section above). Working trees clean;
+  clone source at `../ecad-viewer` `prism/render-fixes` @ `11ad3d1`.
+- Deferred bughunt items above, when the user is ready — the stale-chunk error boundary
+  (#2) is the strongest candidate given it recurred during renderer verification.
+- Still open from earlier: container build + functional verification of the full
+  Phase 1 + Phase 2 flow (hierarchy nav + upload), if not already exercised.
 
 After each iteration: confirm the container starts and backend+frontend stay alive
 (functional testing is done by the user).
