@@ -3,10 +3,12 @@ Project Import Service for KiCAD Prism
 
 Handles Type-1 (single project) and Type-2 (multiple projects) imports.
 """
+import io
 import os
 import shutil
 import tempfile
 import uuid
+import zipfile
 import threading
 from pathlib import Path
 from typing import List, Optional, Dict
@@ -14,6 +16,12 @@ from dataclasses import dataclass
 from git import Repo, RemoteProgress
 from app.services import project_service, path_config_service
 from app.services.workspace_service import workspace
+from app.services.archive_utils import (
+    MAX_UPLOAD_BYTES,
+    find_content_root,
+    safe_extract_zip,
+    sanitize_project_name,
+)
 
 
 @dataclass
@@ -605,3 +613,115 @@ def sync_project(project_id: str) -> dict:
         
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Upload import (web client)
+# ---------------------------------------------------------------------------
+def import_uploaded_archive(
+    archive_bytes: bytes,
+    filename: str,
+    display_name: Optional[str] = None,
+) -> dict:
+    """Import a KiCad project from an uploaded .zip archive.
+
+    Unpacks safely, initializes a git repo (so commit-based features work like a
+    cloned project), discovers project(s), moves them into the projects store, and
+    registers them in the workspace DB. Returns the created project id(s).
+    """
+    if len(archive_bytes) > MAX_UPLOAD_BYTES:
+        raise ValueError("Uploaded archive exceeds the maximum allowed size")
+    if not zipfile.is_zipfile(io.BytesIO(archive_bytes)):
+        raise ValueError("Uploaded file is not a valid .zip archive")
+
+    name = sanitize_project_name(display_name or filename)
+    temp_dir = tempfile.mkdtemp(prefix="kicad_upload_")
+    target_path: Optional[Path] = None
+
+    try:
+        extract_dir = Path(temp_dir) / "extracted"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+            safe_extract_zip(zf, extract_dir)
+
+        content_root = find_content_root(extract_dir)
+
+        # Initialize a git repo + initial commit so commit-scoped endpoints
+        # (history, per-commit file reads) behave like a cloned project.
+        repo = Repo.init(str(content_root))
+        with repo.config_writer() as cw:
+            cw.set_value("user", "email", "prism@localhost")
+            cw.set_value("user", "name", "KiCAD Prism")
+        repo.git.add("-A")
+        repo.index.commit("Initial import from uploaded archive")
+
+        projects = discover_projects_from_repo(repo)
+        if not projects:
+            raise ValueError("No KiCad project (.kicad_pro) found in the uploaded archive")
+
+        import_type = "type2"
+        if len(projects) == 1 and projects[0].relative_path == ".":
+            import_type = "type1"
+
+        base_path = Path(project_service.PROJECTS_ROOT) / ("type1" if import_type == "type1" else "type2")
+        base_path.mkdir(parents=True, exist_ok=True)
+
+        # Ensure a unique destination directory / name.
+        unique_name = name
+        counter = 1
+        while (base_path / unique_name).exists():
+            counter += 1
+            unique_name = f"{name}-{counter}"
+        target_path = base_path / unique_name
+        shutil.move(str(content_root), str(target_path))
+
+        repo_id = workspace.register_repository(
+            name=unique_name,
+            url=f"upload://{unique_name}",
+            clone_path_abs=str(target_path),
+            import_type="single" if import_type == "type1" else "multi",
+        )
+
+        imported_ids: List[str] = []
+        if import_type == "type1":
+            cached = _resolve_cached_paths(str(target_path))
+            project_id = workspace.register_project(
+                repo_id=repo_id,
+                name=unique_name,
+                relative_path=".",
+                description=f"Uploaded project {unique_name}",
+                **cached,
+            )
+            imported_ids.append(project_id)
+        else:
+            for proj in projects:
+                rel_path = proj.relative_path
+                full_project_path = target_path / rel_path if rel_path != "." else target_path
+                pro_files = list(full_project_path.glob("*.kicad_pro"))
+                board_name = pro_files[0].stem if pro_files else proj.name
+                cached = _resolve_cached_paths(str(full_project_path))
+                project_id = workspace.register_project(
+                    repo_id=repo_id,
+                    name=board_name,
+                    relative_path=rel_path,
+                    description=f"{unique_name} / {board_name}",
+                    **cached,
+                )
+                imported_ids.append(project_id)
+
+        return {
+            "status": "completed",
+            "import_type": import_type,
+            "repo_id": repo_id,
+            "project_ids": imported_ids,
+            "name": unique_name,
+            "message": f"Imported {len(imported_ids)} project(s) from archive",
+        }
+
+    except Exception:
+        # Roll back any moved content on failure.
+        if target_path is not None and target_path.exists():
+            shutil.rmtree(target_path, ignore_errors=True)
+        raise
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)

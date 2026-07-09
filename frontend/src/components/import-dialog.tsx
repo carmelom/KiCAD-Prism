@@ -57,10 +57,10 @@ interface ImportDialogProps {
 
 type ImportState =
   | { step: "input" }
-  | { step: "input" }
   | { step: "analyzing"; url: string; jobId?: string; status?: JobStatus }
   | { step: "review"; url: string; analysis: AnalysisResult }
   | { step: "importing"; url: string; jobId: string; status: JobStatus }
+  | { step: "uploading"; filename: string }
   | {
       step: "complete";
       success: boolean;
@@ -76,6 +76,9 @@ export function ImportDialog({
   const [state, setState] = useState<ImportState>({ step: "input" });
   const [url, setUrl] = useState("");
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [mode, setMode] = useState<"github" | "upload">("github");
+  const [file, setFile] = useState<File | null>(null);
+  const [uploadName, setUploadName] = useState("");
   const pollTimeoutRef = useRef<number | null>(null);
   const pollControllerRef = useRef<AbortController | null>(null);
   const pollingTokenRef = useRef(0);
@@ -113,6 +116,9 @@ export function ImportDialog({
     setState({ step: "input" });
     setUrl("");
     setSelectedPaths(new Set());
+    setMode("github");
+    setFile(null);
+    setUploadName("");
   };
 
   const handleClose = () => {
@@ -148,6 +154,43 @@ export function ImportDialog({
         step: "complete",
         success: false,
         message: error.message || "Failed to start analysis",
+      });
+    }
+  };
+
+  const uploadArchive = async () => {
+    if (!file) return;
+
+    stopPolling();
+    setState({ step: "uploading", filename: file.name });
+
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      if (uploadName.trim()) form.append("name", uploadName.trim());
+
+      const res = await fetch("/api/projects/upload", {
+        method: "POST",
+        body: form,
+      });
+
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({}));
+        throw new Error(error.detail || "Upload failed");
+      }
+
+      const result = await res.json();
+      setState({
+        step: "complete",
+        success: true,
+        message: `Successfully imported ${result.project_ids?.length || 1} project(s) from archive`,
+      });
+      onImportComplete();
+    } catch (error: any) {
+      setState({
+        step: "complete",
+        success: false,
+        message: error.message || "Failed to upload archive",
       });
     }
   };
@@ -373,9 +416,14 @@ export function ImportDialog({
       return;
     }
 
-    if (state.step === "input" && url.trim()) {
-      event.preventDefault();
-      void analyzeRepo();
+    if (state.step === "input") {
+      if (mode === "github" && url.trim()) {
+        event.preventDefault();
+        void analyzeRepo();
+      } else if (mode === "upload" && file) {
+        event.preventDefault();
+        void uploadArchive();
+      }
       return;
     }
 
@@ -410,36 +458,106 @@ export function ImportDialog({
             <DialogHeader>
               <DialogTitle>Import Project</DialogTitle>
               <DialogDescription>
-                Enter the URL of a GitHub repository containing KiCAD projects.
+                Import KiCAD projects from a GitHub repository or a local .zip archive.
               </DialogDescription>
             </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="url" className="text-right">
-                  GitHub URL
-                </Label>
-                <Input
-                  id="url"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://github.com/username/repo"
-                  className="col-span-3"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && url.trim()) {
-                      e.preventDefault();
-                      void analyzeRepo();
-                    }
-                  }}
-                />
-              </div>
+
+            <div className="flex gap-2 py-1">
+              <Button
+                variant={mode === "github" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setMode("github")}
+              >
+                From GitHub
+              </Button>
+              <Button
+                variant={mode === "upload" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setMode("upload")}
+              >
+                Upload .zip
+              </Button>
             </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={handleClose}>
-                Cancel
-              </Button>
-              <Button onClick={analyzeRepo} disabled={!url.trim()}>
-                Analyze
-              </Button>
+
+            {mode === "github" ? (
+              <>
+                <div className="grid gap-4 py-4">
+                  <div className="grid grid-cols-4 items-center gap-4">
+                    <Label htmlFor="url" className="text-right">
+                      GitHub URL
+                    </Label>
+                    <Input
+                      id="url"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      placeholder="https://github.com/username/repo"
+                      className="col-span-3"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && url.trim()) {
+                          e.preventDefault();
+                          void analyzeRepo();
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={handleClose}>
+                    Cancel
+                  </Button>
+                  <Button onClick={analyzeRepo} disabled={!url.trim()}>
+                    Analyze
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="grid gap-4 py-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="archive">Project archive (.zip)</Label>
+                    <Input
+                      id="archive"
+                      type="file"
+                      accept=".zip,application/zip"
+                      onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                    />
+                    {file && (
+                      <p className="text-xs text-muted-foreground truncate">
+                        Selected: {file.name}
+                      </p>
+                    )}
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="upload-name">Project name (optional)</Label>
+                    <Input
+                      id="upload-name"
+                      value={uploadName}
+                      onChange={(e) => setUploadName(e.target.value)}
+                      placeholder="Defaults to the archive filename"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={handleClose}>
+                    Cancel
+                  </Button>
+                  <Button onClick={uploadArchive} disabled={!file}>
+                    Upload
+                  </Button>
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {state.step === "uploading" && (
+          <>
+            <DialogHeader>
+              <DialogTitle>Uploading Project</DialogTitle>
+              <DialogDescription>Uploading {state.filename}…</DialogDescription>
+            </DialogHeader>
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
             </div>
           </>
         )}

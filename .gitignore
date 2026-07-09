@@ -36,3 +36,5 @@ data/
 deploy/
 *.crt
 
+# Local reference material / fixtures (KiCad source mirror, example boards) — not for VCS
+/spec/
