@@ -3,8 +3,8 @@
 > Durable standards/architecture live in `CLAUDE.md`. This file tracks live status,
 > decisions, open items, and the next task. Update it at the end of every iteration.
 
-Last updated: 2026-07-10 (repo hygiene: de-fixtured tests from the example board;
-vendored the ecad-viewer source into the repo via git subtree)
+Last updated: 2026-07-10 (feature: open a selected symbol's datasheet via "D" /
+double-click; earlier today: de-fixtured tests; vendored ecad-viewer via subtree)
 
 ## Goal (from CLAUDE.md)
 
@@ -307,6 +307,23 @@ Chosen fix (backend-only, no viewer change, mirrors the flatten approach):
    **Recurred 2026-07-09:** after the renderer re-vendor, Firefox showed stale output
    until Ctrl+Shift+R — same stale-chunk fragility. Now the strongest candidate for the
    next bughunt.
+
+## Feature: open symbol datasheet (2026-07-10)
+
+Select a schematic symbol, then **press "D" or double-click it** to open its
+`Datasheet` field in a new tab. **React-only** (`frontend/src/components/visualizer.tsx`),
+no vendored-viewer change; tsc clean; needs a frontend rebuild.
+- Datasheet read off the live `SchematicSymbol` in the `kicanvas:select` detail
+  (`datasheet` getter / `get_property_text("Datasheet")` / `properties` Map);
+  KiCad's "~"/empty and non-`http(s)` values are ignored.
+- "D": document keydown, skipped while typing/with modifiers, schematic-tab only.
+- Double-click: listener on the (distinct) schematic viewer element. The viewer
+  only emits `select` when an item is hit, so a **freshness guard** (a select
+  within 500 ms) stops a stale selection from opening on empty/sheet/wire
+  double-clicks; sheet double-click (enter subsheet) is untouched.
+- Tracked datasheet cleared on sheet change + project/commit change.
+- Scope note: schematic symbols only (PCB footprint datasheets not wired).
+  Committed on `feat/schematic-hierarchy-and-project-upload` (`a202dab`).
 
 ## Repo hygiene (2026-07-10)
 
