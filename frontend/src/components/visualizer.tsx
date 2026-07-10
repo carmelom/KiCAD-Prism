@@ -322,7 +322,6 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
     }, []);
 
     const openDatasheet = useCallback((url: string | null) => {
-        console.log("[prism-datasheet] openDatasheet called with:", url);
         if (!url) return;
         // Anchor click rather than window.open(...features): Firefox's popup
         // blocker rejects window.open() with a feature string. A <a target=
@@ -886,19 +885,7 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
             // Track the selected symbol's datasheet for the "D" / double-click
             // open triggers. The timestamp is the double-click freshness guard.
             const detail = (event as CustomEvent<KiCanvasSelectDetail>).detail;
-            const item = detail?.item as Record<string, unknown> | undefined;
-            const url = extractDatasheetUrl(detail?.item);
-            console.log(
-                "[prism-datasheet] select fired — itemType:",
-                item?.constructor?.name,
-                "rawDatasheet:",
-                item?.datasheet,
-                "get_property_text?:",
-                typeof item?.get_property_text,
-                "extractedUrl:",
-                url,
-            );
-            selectedDatasheetUrlRef.current = url;
+            selectedDatasheetUrlRef.current = extractDatasheetUrl(detail?.item);
             lastSchematicSelectAtRef.current = Date.now();
             handleCrossProbeSelection("SCH", pcbViewerRef.current, event);
         };
@@ -934,11 +921,6 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
 
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key !== "d" && event.key !== "D") return;
-            console.log(
-                "[prism-datasheet] 'D' keydown — activeTab:", activeTab,
-                "editableTarget:", isEditableTarget(event.target),
-                "url:", selectedDatasheetUrlRef.current,
-            );
             if (event.ctrlKey || event.metaKey || event.altKey) return;
             if (activeTab !== "sch") return;
             if (isEditableTarget(event.target)) return;
@@ -949,14 +931,9 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
         };
 
         const onDblClick = () => {
-            const delta = Date.now() - lastSchematicSelectAtRef.current;
-            console.log(
-                "[prism-datasheet] dblclick — url:", selectedDatasheetUrlRef.current,
-                "msSinceSelect:", delta, "freshWindow:", DOUBLE_CLICK_FRESH_MS,
-            );
             const url = selectedDatasheetUrlRef.current;
             if (!url) return;
-            if (delta > DOUBLE_CLICK_FRESH_MS) return;
+            if (Date.now() - lastSchematicSelectAtRef.current > DOUBLE_CLICK_FRESH_MS) return;
             openDatasheet(url);
         };
 

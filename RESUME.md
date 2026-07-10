@@ -323,7 +323,18 @@ no vendored-viewer change; tsc clean; needs a frontend rebuild.
   double-clicks; sheet double-click (enter subsheet) is untouched.
 - Tracked datasheet cleared on sheet change + project/commit change.
 - Scope note: schematic symbols only (PCB footprint datasheets not wired).
-  Committed on `feat/schematic-hierarchy-and-project-upload` (`a202dab`).
+- **Root-cause fix (VERIFIED in Firefox):** the first cut didn't work because the
+  viewer's `Viewer` extends `EventTarget` (not `HTMLElement`), so
+  `KiCanvasSelectEvent` never reached the `<ecad-viewer>` DOM element — our React
+  `kicanvas:select` listener never fired and the datasheet ref stayed null (this
+  is also why cross-probe never worked). **Fix in the vendored viewer**
+  (`vendor/ecad-viewer/src/kicanvas/elements/common/app.ts`): re-dispatch
+  `KiCanvasSelectEvent` on the app element (a DOM node) as a bubbling/composed
+  event, so the host app observes selection. **Rebuilt
+  `frontend/public/ecad-viewer.js`** (docker; also revives cross-probe). Tab
+  opens via a synthetic `<a target="_blank">` click (Firefox blocks
+  `window.open(..., features)` from keydown). **Requires a frontend rebuild.**
+  Committed on `feat/schematic-hierarchy-and-project-upload`.
 
 ## Repo hygiene (2026-07-10)
 
