@@ -322,7 +322,7 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
     }, []);
 
     const openDatasheet = useCallback((url: string | null) => {
-        console.debug("[prism-datasheet] openDatasheet called with:", url);
+        console.log("[prism-datasheet] openDatasheet called with:", url);
         if (!url) return;
         // Anchor click rather than window.open(...features): Firefox's popup
         // blocker rejects window.open() with a feature string. A <a target=
@@ -890,7 +890,7 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
             const detail = (event as CustomEvent<KiCanvasSelectDetail>).detail;
             const item = detail?.item as Record<string, unknown> | undefined;
             const url = extractDatasheetUrl(detail?.item);
-            console.debug(
+            console.log(
                 "[prism-datasheet] select fired — itemType:",
                 item?.constructor?.name,
                 "rawDatasheet:",
@@ -936,7 +936,7 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
 
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key !== "d" && event.key !== "D") return;
-            console.debug(
+            console.log(
                 "[prism-datasheet] 'D' keydown — activeTab:", activeTab,
                 "editableTarget:", isEditableTarget(event.target),
                 "url:", selectedDatasheetUrlRef.current,
@@ -952,7 +952,7 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
 
         const onDblClick = () => {
             const delta = Date.now() - lastSchematicSelectAtRef.current;
-            console.debug(
+            console.log(
                 "[prism-datasheet] dblclick — url:", selectedDatasheetUrlRef.current,
                 "msSinceSelect:", delta, "freshWindow:", DOUBLE_CLICK_FRESH_MS,
             );
