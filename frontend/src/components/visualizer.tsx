@@ -323,7 +323,20 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
 
     const openDatasheet = useCallback((url: string | null) => {
         if (!url) return;
-        window.open(url, "_blank", "noopener,noreferrer");
+        // Use a synthetic anchor click instead of window.open(url, "_blank",
+        // "noopener,noreferrer"): Firefox's popup blocker rejects window.open()
+        // with a feature string — keydown isn't in dom.popup_allowed_events, and
+        // the feature string trips the blocker on dblclick too. A <a target=
+        // "_blank"> click during a user gesture is a link navigation, so it opens
+        // a tab reliably in both Firefox and Chrome.
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.target = "_blank";
+        anchor.rel = "noopener noreferrer";
+        anchor.style.display = "none";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
     }, []);
 
     const getCrossProbeTargetContext = useCallback(
