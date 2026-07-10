@@ -3,7 +3,8 @@
 > Durable standards/architecture live in `CLAUDE.md`. This file tracks live status,
 > decisions, open items, and the next task. Update it at the end of every iteration.
 
-Last updated: 2026-07-09 (renderer fidelity: dashed lines + table cells — verified in Chrome + Firefox)
+Last updated: 2026-07-10 (repo hygiene: de-fixtured tests from the example board;
+vendored the ecad-viewer source into the repo via git subtree)
 
 ## Goal (from CLAUDE.md)
 
@@ -23,10 +24,13 @@ Order: **#1 first, then #2** (upload slots into a correct hierarchy model).
   and per-instance references in the Python backend, expose them via a new endpoint,
   render the tree + navigation in React, and drive the existing viewer via its
   `switchPage()` API.
-- **The viewer (`frontend/public/ecad-viewer.js`) is a vendored prebuilt blob** synced
-  from an upstream repo (see `docs/ECAD_VIEWER_SYNC_NOTES.md`, commit `a85abd4`). It is a
-  higher-risk surface and is **not modified** in this repo. We use only its existing
-  public API/events (`switchPage(pageId)`, `kicanvas:sheet:loaded`, `kicanvas:sheet:change`).
+- **The viewer's source lives in-repo at `vendor/ecad-viewer/`** (git subtree, squashed;
+  see `docs/ECAD_VIEWER_SYNC_NOTES.md`). The **shipped artifact** is the prebuilt blob
+  `frontend/public/ecad-viewer.js`, still committed and served as a static asset — the
+  build is a deliberate docker step, NOT wired into the frontend image. Upstream fixes are
+  ingested with `git subtree pull` (specific refs only; upstream `main`'s worker-pool
+  migration destabilises Firefox). From React we use only the viewer's public API/events
+  (`switchPage(pageId)`, `kicanvas:sheet:loaded`, `kicanvas:sheet:change`).
 
 ## Architecture findings (scoped analysis, 2026-07-09)
 
@@ -304,11 +308,32 @@ Chosen fix (backend-only, no viewer change, mirrors the flatten approach):
    until Ctrl+Shift+R — same stale-chunk fragility. Now the strongest candidate for the
    next bughunt.
 
+## Repo hygiene (2026-07-10)
+
+- **Tests de-fixtured from the example board.** `test_schematic_hierarchy_service.py`'s
+  `HierarchyFixtureTests` (read `spec/amplified-photodiode/board`, asserted that project's
+  real designators/UUIDs) is replaced by `HierarchySyntheticTests`, which builds its own
+  multi-subsheet project on disk — same coverage, zero external dependency. Example-board
+  name also dropped from the service docstring. `spec/` stays gitignored/local (user's
+  call). 12 hierarchy tests green on host. Committed on `feat/renderer-fidelity` (`a88aa9a`).
+- **ecad-viewer source vendored via git subtree** into `vendor/ecad-viewer/` (branch
+  `chore/vendor-ecad-viewer`), squashed from the fork `prism/render-fixes` @ `6c4bf54`.
+  Motivation: the patched source previously lived only in a loose sibling clone
+  (`../ecad-viewer`) — off-VCS, single-machine, hard to recover from the minified blob.
+  Now it's first-class history. Pruned build-irrelevant upstream assets (`debug/` sandbox,
+  26M preview GIF, PDF): 83M → 25M vendored. Blob unchanged; build inputs verified present;
+  build is package-relative so it runs identically from the new path. Remotes added
+  (local, uncommitted): `ecad-viewer-upstream` (real upstream URL), `ecad-viewer-fork`
+  (legacy local path). See `docs/ECAD_VIEWER_SYNC_NOTES.md` for the full workflow.
+  - **Not yet done:** a fresh docker rebuild from `vendor/ecad-viewer/` to confirm the blob
+    reproduces byte-identically (deferred — heavy; inputs/entrypoint verified, blob is the
+    already-validated artifact). Branch `chore/vendor-ecad-viewer` is unpushed/unmerged.
+
 ## Next task
 
 - Renderer fidelity (dashed lines + table cells) is DONE, verified, and pushed on
-  `feat/renderer-fidelity` (see the render-fidelity section above). Working trees clean;
-  clone source at `../ecad-viewer` `prism/render-fixes` @ `11ad3d1`.
+  `feat/renderer-fidelity` (see the render-fidelity section above). Working trees clean.
+  The patched viewer source now lives in-repo at `vendor/ecad-viewer/` (subtree).
 - Deferred bughunt items above, when the user is ready — the stale-chunk error boundary
   (#2) is the strongest candidate given it recurred during renderer verification.
 - Still open from earlier: container build + functional verification of the full
