@@ -322,21 +322,21 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
     }, []);
 
     const openDatasheet = useCallback((url: string | null) => {
+        console.debug("[prism-datasheet] openDatasheet called with:", url);
         if (!url) return;
-        // Use a synthetic anchor click instead of window.open(url, "_blank",
-        // "noopener,noreferrer"): Firefox's popup blocker rejects window.open()
-        // with a feature string — keydown isn't in dom.popup_allowed_events, and
-        // the feature string trips the blocker on dblclick too. A <a target=
-        // "_blank"> click during a user gesture is a link navigation, so it opens
-        // a tab reliably in both Firefox and Chrome.
+        // Anchor click rather than window.open(...features): Firefox's popup
+        // blocker rejects window.open() with a feature string. A <a target=
+        // "_blank"> click during a user gesture is a link navigation.
         const anchor = document.createElement("a");
         anchor.href = url;
         anchor.target = "_blank";
         anchor.rel = "noopener noreferrer";
-        anchor.style.display = "none";
         document.body.appendChild(anchor);
         anchor.click();
         anchor.remove();
+        // Fallback: if the tab didn't open (blocked), try window.open too.
+        const opened = window.open(url, "_blank");
+        if (opened) opened.opener = null;
     }, []);
 
     const getCrossProbeTargetContext = useCallback(
@@ -888,7 +888,19 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
             // Track the selected symbol's datasheet for the "D" / double-click
             // open triggers. The timestamp is the double-click freshness guard.
             const detail = (event as CustomEvent<KiCanvasSelectDetail>).detail;
-            selectedDatasheetUrlRef.current = extractDatasheetUrl(detail?.item);
+            const item = detail?.item as Record<string, unknown> | undefined;
+            const url = extractDatasheetUrl(detail?.item);
+            console.debug(
+                "[prism-datasheet] select fired — itemType:",
+                item?.constructor?.name,
+                "rawDatasheet:",
+                item?.datasheet,
+                "get_property_text?:",
+                typeof item?.get_property_text,
+                "extractedUrl:",
+                url,
+            );
+            selectedDatasheetUrlRef.current = url;
             lastSchematicSelectAtRef.current = Date.now();
             handleCrossProbeSelection("SCH", pcbViewerRef.current, event);
         };
@@ -924,6 +936,11 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
 
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key !== "d" && event.key !== "D") return;
+            console.debug(
+                "[prism-datasheet] 'D' keydown — activeTab:", activeTab,
+                "editableTarget:", isEditableTarget(event.target),
+                "url:", selectedDatasheetUrlRef.current,
+            );
             if (event.ctrlKey || event.metaKey || event.altKey) return;
             if (activeTab !== "sch") return;
             if (isEditableTarget(event.target)) return;
@@ -934,9 +951,14 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
         };
 
         const onDblClick = () => {
+            const delta = Date.now() - lastSchematicSelectAtRef.current;
+            console.debug(
+                "[prism-datasheet] dblclick — url:", selectedDatasheetUrlRef.current,
+                "msSinceSelect:", delta, "freshWindow:", DOUBLE_CLICK_FRESH_MS,
+            );
             const url = selectedDatasheetUrlRef.current;
             if (!url) return;
-            if (Date.now() - lastSchematicSelectAtRef.current > DOUBLE_CLICK_FRESH_MS) return;
+            if (delta > DOUBLE_CLICK_FRESH_MS) return;
             openDatasheet(url);
         };
 
