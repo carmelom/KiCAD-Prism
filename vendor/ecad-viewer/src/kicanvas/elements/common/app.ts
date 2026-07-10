@@ -118,6 +118,16 @@ export abstract class KCViewerAppElement<
         this.addDisposable(
             this.viewer.addEventListener(KiCanvasSelectEvent.type, (e) => {
                 this.on_viewer_select(e.detail.item, e.detail.previous);
+                // The Viewer is a plain EventTarget, so its selection events
+                // never reach the DOM. Re-dispatch on this element (a DOM node)
+                // as a bubbling/composed event so the host application can
+                // observe selection (e.g. cross-probe, open-datasheet).
+                this.dispatchEvent(
+                    new KiCanvasSelectEvent({
+                        item: e.detail.item,
+                        previous: e.detail.previous,
+                    }),
+                );
             }),
         );
 

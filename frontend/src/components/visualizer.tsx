@@ -326,7 +326,8 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
         if (!url) return;
         // Anchor click rather than window.open(...features): Firefox's popup
         // blocker rejects window.open() with a feature string. A <a target=
-        // "_blank"> click during a user gesture is a link navigation.
+        // "_blank"> click during a user gesture is a link navigation, so it
+        // opens a tab reliably in both Firefox and Chrome.
         const anchor = document.createElement("a");
         anchor.href = url;
         anchor.target = "_blank";
@@ -334,9 +335,6 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
         document.body.appendChild(anchor);
         anchor.click();
         anchor.remove();
-        // Fallback: if the tab didn't open (blocked), try window.open too.
-        const opened = window.open(url, "_blank");
-        if (opened) opened.opener = null;
     }, []);
 
     const getCrossProbeTargetContext = useCallback(
