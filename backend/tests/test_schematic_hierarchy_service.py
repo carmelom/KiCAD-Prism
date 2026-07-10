@@ -11,12 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.services import schematic_hierarchy_service as svc  # noqa: E402
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-FIXTURE_DIR = REPO_ROOT / "spec" / "amplified-photodiode" / "board"
-ROOT_SCH = FIXTURE_DIR / "amplified_photodiode_board.kicad_sch"
-
-ROOT_UUID = "dc706e99-eaec-450e-bb04-b1ce285328ad"
-TIA_SHEET_UUID = "dbb3bccb-6d0f-4202-839c-5d2c6a1b3f28"
+# Synthetic root UUID shared by the end-to-end and unit tests below. The suite
+# builds its own schematics on disk -- it does not depend on any external
+# example project.
+ROOT_UUID = "00000000-0000-4000-8000-000000000001"
 
 
 class SexprParserTests(unittest.TestCase):
@@ -31,12 +29,58 @@ class SexprParserTests(unittest.TestCase):
         self.assertIsNone(svc.parse_sexpr("   \n  "))
 
 
-class HierarchyFixtureTests(unittest.TestCase):
+class HierarchySyntheticTests(unittest.TestCase):
+    """End-to-end resolution over a synthetic multi-subsheet project built on
+    disk. Exercises root metadata, multi-subsheet resolution, per-instance page
+    numbers, sheet-path composition, and per-instance reference designators --
+    without depending on any external example project."""
+
+    AMP_UUID = "00000000-0000-4000-8000-0000000000a1"
+
+    ROOT = (
+        f'(kicad_sch (version 20250114) (uuid "{ROOT_UUID}")'
+        f'  (symbol (uuid "symJ") (lib_id "Connector:Conn_01x02")'
+        f'    (instances (project "p" (path "/{ROOT_UUID}"'
+        f'      (reference "J1") (unit 1)))))'
+        f'  (sheet (uuid "{AMP_UUID}")'
+        f'    (property "Sheetname" "Amplifier")'
+        f'    (property "Sheetfile" "amp.kicad_sch")'
+        f'    (instances (project "p" (path "/{ROOT_UUID}" (page "2")))))'
+        f'  (sheet (uuid "pwr")'
+        f'    (property "Sheetname" "Power")'
+        f'    (property "Sheetfile" "power.kicad_sch")'
+        f'    (instances (project "p" (path "/{ROOT_UUID}" (page "3")))))'
+        f'  (sheet (uuid "mech")'
+        f'    (property "Sheetname" "Mechanical")'
+        f'    (property "Sheetfile" "mech.kicad_sch")'
+        f'    (instances (project "p" (path "/{ROOT_UUID}" (page "4")))))'
+        f'  (sheet_instances (path "/" (page "1"))))'
+    )
+    AMP = (
+        f'(kicad_sch (version 20250114) (uuid "AMPSCR")'
+        f'  (symbol (uuid "symR1") (lib_id "Device:R")'
+        f'    (instances (project "p" (path "/{ROOT_UUID}/{AMP_UUID}"'
+        f'      (reference "R201") (unit 1)))))'
+        f'  (symbol (uuid "symR2") (lib_id "Device:R")'
+        f'    (instances (project "p" (path "/{ROOT_UUID}/{AMP_UUID}"'
+        f'      (reference "R211") (unit 1))))))'
+    )
+    POWER = '(kicad_sch (version 20250114) (uuid "PWRSCR"))'
+    MECH = '(kicad_sch (version 20250114) (uuid "MECHSCR"))'
+
     @classmethod
     def setUpClass(cls):
-        if not ROOT_SCH.exists():
-            raise unittest.SkipTest(f"fixture not found: {ROOT_SCH}")
-        cls.result = svc.resolve_from_directory(str(ROOT_SCH))
+        cls._tmp = tempfile.TemporaryDirectory()
+        root_dir = Path(cls._tmp.name)
+        (root_dir / "root.kicad_sch").write_text(cls.ROOT)
+        (root_dir / "amp.kicad_sch").write_text(cls.AMP)
+        (root_dir / "power.kicad_sch").write_text(cls.POWER)
+        (root_dir / "mech.kicad_sch").write_text(cls.MECH)
+        cls.result = svc.resolve_from_directory(str(root_dir / "root.kicad_sch"))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
 
     def test_root_metadata(self):
         self.assertEqual(self.result["rootUuid"], ROOT_UUID)
@@ -44,40 +88,39 @@ class HierarchyFixtureTests(unittest.TestCase):
 
     def test_root_node(self):
         root = self.result["root"]
-        self.assertEqual(root["name"], "amplified_photodiode_board")
+        self.assertEqual(root["name"], "root")
         self.assertEqual(root["sheetPath"], f"/{ROOT_UUID}")
         self.assertEqual(root["page"], "1")
 
     def test_three_subsheets_resolved(self):
         children = self.result["root"]["children"]
         names = sorted(c["name"] for c in children)
-        self.assertEqual(names, ["Mechanical", "Power", "TransimpedanceAmplifier"])
+        self.assertEqual(names, ["Amplifier", "Mechanical", "Power"])
         # All children resolved to real files (no unresolved flag).
         self.assertFalse(any(c.get("unresolved") for c in children))
 
     def test_subsheet_page_numbers(self):
         pages = {c["name"]: c["page"] for c in self.result["root"]["children"]}
-        # power=3, mechanical=4, transimpedance=2 (root=1).
-        self.assertEqual(pages["TransimpedanceAmplifier"], "2")
+        self.assertEqual(pages["Amplifier"], "2")
         self.assertEqual(pages["Power"], "3")
         self.assertEqual(pages["Mechanical"], "4")
 
     def test_subsheet_instance_path_includes_root_and_sheet_uuid(self):
-        tia = next(c for c in self.result["root"]["children"]
-                   if c["name"] == "TransimpedanceAmplifier")
-        self.assertEqual(tia["sheetPath"], f"/{ROOT_UUID}/{TIA_SHEET_UUID}")
+        amp = next(c for c in self.result["root"]["children"]
+                   if c["name"] == "Amplifier")
+        self.assertEqual(amp["sheetPath"], f"/{ROOT_UUID}/{self.AMP_UUID}")
 
     def test_root_references_present(self):
         refs = self.result["references"][f"/{ROOT_UUID}"]
         values = {v["reference"] for v in refs.values()}
-        # Known root-level designators from the fixture.
-        self.assertIn("J102", values)
+        # Root-level designator lives on the root sheet path.
+        self.assertIn("J1", values)
 
     def test_subsheet_references_resolved_per_instance(self):
-        tia_path = f"/{ROOT_UUID}/{TIA_SHEET_UUID}"
-        refs = self.result["references"][tia_path]
+        amp_path = f"/{ROOT_UUID}/{self.AMP_UUID}"
+        refs = self.result["references"][amp_path]
         values = {v["reference"] for v in refs.values()}
-        # R201/R211 live in the TransimpedanceAmplifier instance, not the root.
+        # R201/R211 live in the Amplifier instance, not the root.
         self.assertIn("R201", values)
         self.assertIn("R211", values)
 

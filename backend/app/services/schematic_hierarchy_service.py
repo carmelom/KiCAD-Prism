@@ -13,8 +13,7 @@ runtime), mirroring the algorithm in the KiCad source
 resolver is pure: it takes the root file content plus a ``load_sheet`` callback,
 so it works identically for a working-tree checkout and for a git commit.
 
-Join keys (validated against ``spec/amplified-photodiode/board``, file format
-v20250114):
+Join keys (validated against real KiCad projects, file format v20250114):
 
 * A sheet-instance path is ``/<rootUuid>/<sheetUuid>/...`` (root-relative,
   including the root UUID as the first element).
