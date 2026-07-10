@@ -20,6 +20,7 @@ interface WorkspaceListViewProps {
   onDeleteFolder: (folder: FolderTreeItem) => void;
   onMoveProject: (project: Project) => void;
   onDeleteProject: (project: Project) => void;
+  onRegenerateThumbnail: (project: Project) => void;
   canManageProjects: boolean;
 }
 
@@ -55,6 +56,7 @@ export function WorkspaceListView({
   onDeleteFolder,
   onMoveProject,
   onDeleteProject,
+  onRegenerateThumbnail,
   canManageProjects,
 }: WorkspaceListViewProps) {
   return (
@@ -128,6 +130,7 @@ export function WorkspaceListView({
                   projectName={getProjectDisplayName(project)}
                   onMove={onMoveProject}
                   onDelete={onDeleteProject}
+                  onRegenerateThumbnail={onRegenerateThumbnail}
                   canManage={canManageProjects}
                 />
               </div>

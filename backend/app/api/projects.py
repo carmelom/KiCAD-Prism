@@ -27,6 +27,7 @@ from app.services import (
 from app.services.workspace_service import workspace
 from app.services.comments_url_service import build_comments_source_urls, resolve_comments_base_url
 from app.services.git_service import (
+    get_branches,
     get_commit_distance,
     get_commits_list,
     get_commits_list_filtered,
@@ -646,6 +647,17 @@ async def trigger_workflow(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.get("/{project_id}/branches")
+async def get_project_branches(
+    project_id: str,
+    user: AuthenticatedUser = Depends(require_viewer),
+):
+    """List branch refs that can be viewed without switching the working checkout."""
+    project = get_project_for_role_or_404(project_id, user.role)
+    repo_path, relative_path = _repo_context(project)
+    return await asyncio.to_thread(get_branches, repo_path, relative_path)
+
 @router.get("/{project_id}/thumbnail")
 async def get_project_thumbnail(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
     project = get_project_for_role_or_404(project_id, user.role)
@@ -661,6 +673,22 @@ async def get_project_thumbnail(project_id: str, user: AuthenticatedUser = Depen
     if not path:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
     return FileResponse(path, headers={"Cache-Control": "public, max-age=300"})
+
+@router.post("/{project_id}/thumbnail/regenerate", dependencies=[Depends(require_designer)])
+async def regenerate_project_thumbnail(project_id: str, user: AuthenticatedUser = Depends(require_designer)):
+    project = get_project_for_role_or_404(project_id, user.role)
+    
+    logs = []
+    success = project_import_service.generate_thumbnail_for_project(project.path, logs)
+    
+    if not success:
+        error_msg = logs[-1] if logs else "Failed to render PCB"
+        raise HTTPException(status_code=500, detail=f"Failed to generate thumbnail: {error_msg}")
+        
+    cached = project_import_service.resolve_cached_paths(project.path)
+    workspace.update_project(project_id, **cached)
+    
+    return {"status": "success", "message": "Thumbnail regenerated successfully"}
 
 @router.get("/{project_id}", response_model=project_service.Project)
 async def get_project_detail(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
@@ -988,7 +1016,11 @@ async def get_doc_file_content(
     }
 
 @router.get("/{project_id}/releases")
-async def get_project_releases(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def get_project_releases(
+    project_id: str,
+    ref: Optional[str] = None,
+    user: AuthenticatedUser = Depends(require_viewer),
+):
     """
     Get list of Git releases/tags for a project.
     For Type-2 projects, uses parent repo with subproject file tracking.
@@ -997,9 +1029,9 @@ async def get_project_releases(project_id: str, user: AuthenticatedUser = Depend
     
     repo_path, relative_path = _repo_context(project)
     if relative_path:
-        releases = get_releases_filtered(repo_path, relative_path)
+        releases = get_releases_filtered(repo_path, relative_path, ref)
     else:
-        releases = get_releases(project.path)
+        releases = get_releases(project.path, ref)
     
     return {"releases": releases}
 
@@ -1007,6 +1039,7 @@ async def get_project_releases(project_id: str, user: AuthenticatedUser = Depend
 async def get_project_commit_distance(
     project_id: str,
     commit: str,
+    ref: Optional[str] = None,
     user: AuthenticatedUser = Depends(require_viewer),
 ):
     """
@@ -1016,13 +1049,14 @@ async def get_project_commit_distance(
     project = get_project_for_role_or_404(project_id, user.role)
 
     repo_path, relative_path = _repo_context(project)
-    commits_behind = get_commit_distance(repo_path, commit, relative_path)
+    commits_behind = get_commit_distance(repo_path, commit, relative_path, ref)
     return {"commits_behind": commits_behind}
 
 @router.get("/{project_id}/commits")
 async def get_project_commits(
     project_id: str,
     limit: int = Query(default=50, ge=1, le=500),
+    ref: Optional[str] = None,
     user: AuthenticatedUser = Depends(require_viewer),
 ):
     """
@@ -1033,9 +1067,9 @@ async def get_project_commits(
     
     repo_path, relative_path = _repo_context(project)
     if relative_path:
-        commits = get_commits_list_filtered(repo_path, relative_path, limit)
+        commits = get_commits_list_filtered(repo_path, relative_path, limit, ref)
     else:
-        commits = get_commits_list(project.path, limit)
+        commits = get_commits_list(project.path, limit, ref)
     
     return {"commits": commits}
 

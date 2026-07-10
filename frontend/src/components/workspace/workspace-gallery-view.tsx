@@ -22,6 +22,7 @@ interface WorkspaceGalleryViewProps {
   onDeleteFolder: (folder: FolderTreeItem) => void;
   onMoveProject: (project: Project) => void;
   onDeleteProject: (project: Project) => void;
+  onRegenerateThumbnail: (project: Project) => void;
   canManageProjects: boolean;
 }
 
@@ -41,6 +42,7 @@ export function WorkspaceGalleryView({
   onDeleteFolder,
   onMoveProject,
   onDeleteProject,
+  onRegenerateThumbnail,
   canManageProjects,
 }: WorkspaceGalleryViewProps) {
   return (
@@ -68,6 +70,7 @@ export function WorkspaceGalleryView({
                       projectName={getProjectDisplayName(project)}
                       onMove={onMoveProject}
                       onDelete={onDeleteProject}
+                      onRegenerateThumbnail={onRegenerateThumbnail}
                       canManage={canManageProjects}
                     />
                   }
@@ -143,6 +146,7 @@ export function WorkspaceGalleryView({
                         projectName={getProjectDisplayName(project)}
                         onMove={onMoveProject}
                         onDelete={onDeleteProject}
+                        onRegenerateThumbnail={onRegenerateThumbnail}
                         canManage={canManageProjects}
                       />
                     }

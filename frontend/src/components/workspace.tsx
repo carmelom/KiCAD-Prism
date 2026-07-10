@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { useWorkspaceData } from "@/hooks/use-workspace-data";
 import { useWorkspaceSearch } from "@/hooks/use-workspace-search";
 import { canManageProjects as roleCanManageProjects, canOpenLibraryManager } from "@/lib/roles";
+import { fetchApi, readApiError } from "@/lib/api";
 import { WorkspaceBreadcrumbs } from "./workspace/workspace-breadcrumbs";
 import { WorkspaceGalleryView } from "./workspace/workspace-gallery-view";
 import { WorkspaceListView } from "./workspace/workspace-list-view";
@@ -59,7 +60,6 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
   const [section, setSection] = useState<WorkspaceSection>("projects");
   const [viewMode, setViewMode] = useState<ViewMode>("gallery");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [activeApp, setActiveApp] = useState<"index" | "library-manager">("index");
 
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -181,11 +181,6 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
     }
   }, [projects, selectedProjectId]);
 
-  useEffect(() => {
-    if (section !== "apps") {
-      setActiveApp("index");
-    }
-  }, [section]);
 
   const handleCreateFolder = async (name: string) => {
     if (!canManageProjects) {
@@ -295,6 +290,32 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
     }
   };
 
+  const handleRegenerateThumbnail = async (project: Project) => {
+    if (!canManageProjects) {
+      toast.error("You do not have permission to regenerate thumbnails");
+      return;
+    }
+
+    const toastId = toast.loading(`Regenerating thumbnail for "${getProjectDisplayName(project)}"...`);
+    try {
+      const response = await fetchApi(`/api/projects/${project.id}/thumbnail/regenerate`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const error = await readApiError(response, "Failed to regenerate thumbnail");
+        toast.error(error, { id: toastId });
+        return;
+      }
+
+      toast.success("Thumbnail regenerated successfully", { id: toastId });
+      // Refresh the workspace to reload the updated thumbnail
+      await refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to regenerate thumbnail", { id: toastId });
+    }
+  };
+
   if (error) {
     return <div className="flex h-64 items-center justify-center rounded-xl border text-destructive">{error}</div>;
   }
@@ -339,11 +360,14 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
           <main className="min-h-0 flex-1 overflow-hidden">
             {loading ? (
               <WorkspaceLoadingState />
-            ) : section === "apps" ? (
-              activeApp === "library-manager" ? (
-                canOpenLibrary ? <LibraryManagerPanel user={user} /> : <WorkspaceAppsPlaceholder canOpenLibraryManager={canOpenLibrary} onOpenLibraryManager={() => setActiveApp("library-manager")} />
+            ) : section === "library-manager" ? (
+              canOpenLibrary ? (
+                <LibraryManagerPanel user={user} />
               ) : (
-                <WorkspaceAppsPlaceholder canOpenLibraryManager={canOpenLibrary} onOpenLibraryManager={() => setActiveApp("library-manager")} />
+                <WorkspaceAppsPlaceholder
+                  canOpenLibraryManager={canOpenLibrary}
+                  onOpenLibraryManager={() => {}}
+                />
               )
             ) : (
               <div className="flex h-full min-h-0 flex-col p-6">
@@ -417,6 +441,7 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
                         onDeleteFolder={setFolderToDelete}
                         onMoveProject={setProjectToMove}
                         onDeleteProject={setProjectToDelete}
+                        onRegenerateThumbnail={handleRegenerateThumbnail}
                         canManageProjects={canManageProjects}
                       />
                     ) : (
@@ -435,6 +460,7 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
                         onDeleteFolder={setFolderToDelete}
                         onMoveProject={setProjectToMove}
                         onDeleteProject={setProjectToDelete}
+                        onRegenerateThumbnail={handleRegenerateThumbnail}
                         canManageProjects={canManageProjects}
                       />
                     )}

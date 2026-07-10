@@ -1,4 +1,4 @@
-import { Folder, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Folder, MoreHorizontal, Pencil, Trash2, Image } from "lucide-react";
 
 import { FolderTreeItem, Project } from "@/types/project";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ interface ProjectActionMenuProps {
   projectName: string;
   onMove: (project: Project) => void;
   onDelete: (project: Project) => void;
+  onRegenerateThumbnail?: (project: Project) => void;
   canManage: boolean;
 }
 
@@ -72,7 +73,7 @@ export function FolderActionMenu({ folder, onRename, onDelete, canManage }: Fold
   );
 }
 
-export function ProjectActionMenu({ project, projectName, onMove, onDelete, canManage }: ProjectActionMenuProps) {
+export function ProjectActionMenu({ project, projectName, onMove, onDelete, onRegenerateThumbnail, canManage }: ProjectActionMenuProps) {
   if (!canManage) {
     return null;
   }
@@ -101,6 +102,15 @@ export function ProjectActionMenu({ project, projectName, onMove, onDelete, canM
         >
           <Folder className="h-4 w-4" />
           Move to Folder
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={(event) => {
+            event.stopPropagation();
+            onRegenerateThumbnail?.(project);
+          }}
+        >
+          <Image className="h-4 w-4" />
+          Regenerate Thumbnail
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem

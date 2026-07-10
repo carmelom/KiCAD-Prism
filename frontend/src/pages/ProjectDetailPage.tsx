@@ -1,5 +1,5 @@
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { Suspense, lazy, useEffect, useState, type ComponentType } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState, type ComponentType } from "react";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, FileText, History, Box, FolderOpen, ChevronLeft, ChevronRight, GitBranch, RotateCcw, PlayCircle, RefreshCw, Menu, Settings } from "lucide-react";
 import { fetchApi, fetchJson, readApiError } from "@/lib/api";
@@ -46,6 +46,19 @@ interface ProjectOverviewResponse {
     readme: string | null;
 }
 
+interface ProjectBranch {
+    name: string;
+    ref: string;
+    source: "local" | "remote" | string;
+    is_current: boolean;
+    hash: string;
+    commit: string;
+}
+
+interface ProjectBranchesResponse {
+    branches: ProjectBranch[];
+}
+
 interface WorkflowJobResponse {
     job_id: string;
 }
@@ -75,6 +88,9 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
     const [visualizerLoaded, setVisualizerLoaded] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
     const [pathConfigOpen, setPathConfigOpen] = useState(false);
+    const [branches, setBranches] = useState<ProjectBranch[]>([]);
+    const [branchesLoading, setBranchesLoading] = useState(false);
+    const [branchError, setBranchError] = useState<string | null>(null);
     const canMutateProject = user?.role === "admin" || user?.role === "designer";
 
     // Helper function to get display name
@@ -88,14 +104,32 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
         }
     }, [activeSection]);
 
+    const selectedBranchRef = searchParams.get('branch');
     const currentCommit = searchParams.get('commit');
+    const selectedBranch = useMemo(
+        () => branches.find((branch) => branch.ref === selectedBranchRef) || null,
+        [branches, selectedBranchRef]
+    );
+    const activeCommit = currentCommit || selectedBranch?.commit || null;
 
     const handleViewCommit = (commitHash: string) => {
-        setSearchParams({ commit: commitHash });
+        const next: Record<string, string> = { commit: commitHash };
+        if (selectedBranchRef) {
+            next.branch = selectedBranchRef;
+        }
+        setSearchParams(next);
     };
 
     const handleResetToLatest = () => {
+        if (currentCommit && selectedBranchRef) {
+            setSearchParams({ branch: selectedBranchRef });
+            return;
+        }
         setSearchParams({});
+    };
+
+    const handleBranchChange = (branchRef: string) => {
+        setSearchParams(branchRef ? { branch: branchRef } : {});
     };
 
     const handleSync = async () => {
@@ -123,6 +157,42 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
 
     useEffect(() => {
         if (!projectId) {
+            setBranches([]);
+            return;
+        }
+
+        const controller = new AbortController();
+        setBranchesLoading(true);
+        setBranchError(null);
+
+        const fetchBranches = async () => {
+            try {
+                const data = await fetchJson<ProjectBranchesResponse>(
+                    `/api/projects/${projectId}/branches`,
+                    { signal: controller.signal },
+                    "Failed to load branches"
+                );
+                if (!controller.signal.aborted) {
+                    setBranches(data.branches || []);
+                }
+            } catch (err) {
+                if (!controller.signal.aborted) {
+                    setBranches([]);
+                    setBranchError(err instanceof Error ? err.message : "Failed to load branches");
+                }
+            } finally {
+                if (!controller.signal.aborted) {
+                    setBranchesLoading(false);
+                }
+            }
+        };
+
+        void fetchBranches();
+        return () => controller.abort();
+    }, [projectId, refreshKey]);
+
+    useEffect(() => {
+        if (!projectId) {
             setLoading(false);
             return;
         }
@@ -132,8 +202,8 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
 
         const fetchProjectData = async () => {
             try {
-                const overviewUrl = currentCommit
-                    ? `/api/projects/${projectId}/overview?commit=${encodeURIComponent(currentCommit)}`
+                const overviewUrl = activeCommit
+                    ? `/api/projects/${projectId}/overview?commit=${encodeURIComponent(activeCommit)}`
                     : `/api/projects/${projectId}/overview`;
                 const overview = await fetchJson<ProjectOverviewResponse>(
                     overviewUrl,
@@ -163,7 +233,7 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
 
         void fetchProjectData();
         return () => controller.abort();
-    }, [projectId, currentCommit, refreshKey]);
+    }, [projectId, activeCommit, refreshKey]);
 
     // Calculate commits behind when viewing specific commit
     useEffect(() => {
@@ -181,8 +251,9 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
             }
 
             try {
+                const refQuery = selectedBranchRef ? `&ref=${encodeURIComponent(selectedBranchRef)}` : "";
                 const data = await fetchJson<CommitDistanceResponse>(
-                    `/api/projects/${projectId}/commits/distance?commit=${encodeURIComponent(currentCommit)}`,
+                    `/api/projects/${projectId}/commits/distance?commit=${encodeURIComponent(currentCommit)}${refQuery}`,
                     { signal: controller.signal },
                     "Failed to fetch commit distance"
                 );
@@ -202,7 +273,7 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
 
         void calculateCommitsBehind();
         return () => controller.abort();
-    }, [currentCommit, projectId]);
+    }, [currentCommit, projectId, selectedBranchRef]);
 
     if (loading) {
         return <div className="flex items-center justify-center h-screen">Loading...</div>;
@@ -233,7 +304,7 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
         if (!src) return src;
         if (src.startsWith('http')) return src;
         const assetUrl = `/api/projects/${projectId}/asset/${src}`;
-        return currentCommit ? `${assetUrl}?commit=${encodeURIComponent(currentCommit)}` : assetUrl;
+        return activeCommit ? `${assetUrl}?commit=${encodeURIComponent(activeCommit)}` : assetUrl;
     };
 
     return (
@@ -284,6 +355,25 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
                 <div className="flex-1">
                     <h1 className="text-xl font-bold truncate max-w-[200px] md:max-w-none">{project ? getDisplayName(project) : ''}</h1>
                     <p className="text-sm text-muted-foreground hidden md:block">{project?.description}</p>
+                </div>
+
+                <div className="hidden min-w-0 items-center gap-2 md:flex">
+                    <GitBranch className="h-4 w-4 text-muted-foreground" />
+                    <select
+                        value={selectedBranchRef || ""}
+                        onChange={(event) => handleBranchChange(event.target.value)}
+                        disabled={branchesLoading}
+                        title={branchError || "View this project on another branch"}
+                        className="h-9 max-w-[260px] rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <option value="">{branchesLoading ? "Loading branches..." : "Current checkout"}</option>
+                        {branches.map((branch) => (
+                            <option key={branch.ref} value={branch.ref}>
+                                {branch.source === "remote" ? branch.ref : branch.name}
+                                {branch.is_current ? " (current)" : ""}
+                            </option>
+                        ))}
+                    </select>
                 </div>
 
                 {/* Sync Button */}
@@ -342,13 +432,18 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
             )}
 
             {/* Version Banner */}
-            {currentCommit && (
+            {(currentCommit || selectedBranch) && (
                 <div className="bg-amber-500/10 border-b border-amber-500/20 px-6 py-3 flex items-center justify-between">
                     <div className="flex items-center gap-2 text-sm">
                         <GitBranch className="h-4 w-4 text-amber-500" />
                         <span className="font-medium">
-                            Viewing commit {currentCommit.substring(0, 7)}
-                            {commitsBehind > 0 && (
+                            {currentCommit
+                                ? `Viewing commit ${currentCommit.substring(0, 7)}`
+                                : `Viewing branch ${selectedBranch?.ref || selectedBranchRef}`}
+                            {selectedBranch && (
+                                <span className="text-muted-foreground ml-2">@ {selectedBranch.hash}</span>
+                            )}
+                            {currentCommit && commitsBehind > 0 && (
                                 <span className="text-muted-foreground ml-2">
                                     ({commitsBehind} {commitsBehind === 1 ? 'commit' : 'commits'} behind latest)
                                 </span>
@@ -362,7 +457,7 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
                         className="h-7"
                     >
                         <RotateCcw className="h-3 w-3 mr-2" />
-                        Return to Latest
+                        {currentCommit && selectedBranchRef ? "Return to Branch Head" : "Return to Current Checkout"}
                     </Button>
                 </div>
             )}
@@ -445,7 +540,7 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
                             <h2 className="text-2xl font-bold mb-6">Assets Portal</h2>
                             {projectId && (
                                 <Suspense fallback={<div className="text-sm text-muted-foreground">Loading assets...</div>}>
-                                    <AssetsPortal projectId={projectId} commit={currentCommit} />
+                                    <AssetsPortal projectId={projectId} commit={activeCommit} />
                                 </Suspense>
                             )}
                         </div>
@@ -456,7 +551,7 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
                             <h2 className="text-2xl font-bold mb-6">Documentation</h2>
                             {projectId && (
                                 <Suspense fallback={<div className="text-sm text-muted-foreground">Loading documentation...</div>}>
-                                    <DocumentationBrowser projectId={projectId} commit={currentCommit} key={activeSection} />
+                                    <DocumentationBrowser projectId={projectId} commit={activeCommit} key={activeSection} />
                                 </Suspense>
                             )}
                         </div>
@@ -470,6 +565,7 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
                                     <HistoryViewer
                                         key={refreshKey}
                                         projectId={projectId}
+                                        branchRef={selectedBranchRef}
                                         onViewCommit={handleViewCommit}
                                         canCompareDiffs={canMutateProject}
                                     />
@@ -489,7 +585,7 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
                             <div className="flex-1 min-h-0">
                                 {projectId && (
                                     <Suspense fallback={<div className="text-sm text-muted-foreground">Loading visualizers...</div>}>
-                                        <Visualizer projectId={projectId} user={user} commit={currentCommit} />
+                                        <Visualizer projectId={projectId} user={user} commit={activeCommit} />
                                     </Suspense>
                                 )}
                             </div>

@@ -5,6 +5,7 @@ Handles Type-1 (single project) and Type-2 (multiple projects) imports.
 """
 import io
 import os
+import subprocess
 import shutil
 import tempfile
 import uuid
@@ -293,7 +294,7 @@ def cleanup_analysis_temp(analysis: AnalysisResult):
         shutil.rmtree(analysis.temp_path, ignore_errors=True)
 
 
-def _resolve_cached_paths(project_path: str) -> dict:
+def resolve_cached_paths(project_path: str) -> dict:
     """Resolve and return cached path info for a project directory."""
     try:
         resolved = path_config_service.resolve_paths(project_path)
@@ -344,6 +345,83 @@ def _resolve_cached_paths(project_path: str) -> dict:
         }
     except Exception:
         return {}
+
+
+def generate_thumbnail_for_project(project_path: str, logs_list: Optional[List[str]] = None) -> bool:
+    """
+    Find the main .kicad_pcb file and run kicad-cli pcb render to generate a thumbnail.
+    """
+    try:
+        resolved = path_config_service.resolve_paths(project_path)
+        pcb_file = resolved.pcb
+        if not pcb_file or not os.path.exists(pcb_file):
+            if logs_list is not None:
+                logs_list.append(f"No .kicad_pcb file found to generate thumbnail for {project_path}")
+            return False
+        
+        # Check standard paths for kicad-cli
+        cli_path = "kicad-cli"
+        # Check environment variable
+        for var in ("KICAD_CLI_PATH", "KICAD_CLI"):
+            val = os.environ.get(var, "").strip()
+            if val and os.path.exists(val):
+                cli_path = val
+                break
+        else:
+            # Check standard Mac path
+            mac_path = "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"
+            if os.path.exists(mac_path):
+                cli_path = mac_path
+            else:
+                # Check PATH
+                which_cli = shutil.which("kicad-cli")
+                if which_cli:
+                    cli_path = which_cli
+
+        if logs_list is not None:
+            logs_list.append(f"Generating thumbnail using {cli_path} for PCB: {pcb_file}")
+
+        # Create assets/thumbnail directory
+        thumbnail_dir = Path(project_path) / "assets" / "thumbnail"
+        thumbnail_dir.mkdir(parents=True, exist_ok=True)
+        output_path = thumbnail_dir / "thumbnail.png"
+        
+        cmd = [
+            cli_path,
+            "pcb",
+            "render",
+            "--quality", "high",
+            "--floor",
+            "--perspective",
+            "--rotate", "-45,0,45",
+            "--width", "800",
+            "--height", "600",
+            "-o", str(output_path),
+            pcb_file
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False
+        )
+        
+        if result.returncode != 0:
+            if logs_list is not None:
+                logs_list.append(f"kicad-cli render failed (code {result.returncode}): {result.stderr[:400]}")
+            return False
+            
+        if logs_list is not None:
+            logs_list.append(f"Successfully generated thumbnail at {output_path}")
+        return True
+        
+    except Exception as e:
+        if logs_list is not None:
+            logs_list.append(f"Exception during thumbnail generation: {e}")
+        return False
+
 
 
 def _run_import_job(job_id: str, repo_url: str, import_type: str, 
@@ -419,7 +497,9 @@ def _run_import_job(job_id: str, repo_url: str, import_type: str,
         imported_ids = []
         
         if import_type == "type1":
-            cached = _resolve_cached_paths(str(target_path))
+            # Generate thumbnail before resolving paths
+            generate_thumbnail_for_project(str(target_path), job['logs'])
+            cached = resolve_cached_paths(str(target_path))
             project_id = workspace.register_project(
                 repo_id=repo_id,
                 name=repo_name,
@@ -440,9 +520,11 @@ def _run_import_job(job_id: str, repo_url: str, import_type: str,
             
             for rel_path in selected_paths:
                 full_project_path = target_path / rel_path
+                # Generate thumbnail before resolving paths
+                generate_thumbnail_for_project(str(full_project_path), job['logs'])
                 pro_files = list(full_project_path.glob("*.kicad_pro"))
                 board_name = pro_files[0].stem if pro_files else os.path.basename(rel_path)
-                cached = _resolve_cached_paths(str(full_project_path))
+                cached = resolve_cached_paths(str(full_project_path))
                 project_id = workspace.register_project(
                     repo_id=repo_id,
                     name=board_name,
@@ -599,7 +681,9 @@ def sync_project(project_id: str) -> dict:
         path_config_service.clear_config_cache()
         project_path = row.get('path', '')
         if project_path and os.path.isdir(project_path):
-            cached = _resolve_cached_paths(project_path)
+            # Generate/refresh thumbnail on sync
+            generate_thumbnail_for_project(project_path)
+            cached = resolve_cached_paths(project_path)
             workspace.update_project(project_id, **cached)
 
         # Update repo last_synced_at

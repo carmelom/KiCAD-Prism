@@ -31,6 +31,7 @@ interface CommitsResponse {
 
 interface HistoryViewerProps {
     projectId: string;
+    branchRef?: string | null;
     onViewCommit: (commitHash: string) => void;
     canCompareDiffs: boolean;
 }
@@ -134,7 +135,7 @@ function CommitItem({ commit, onViewCommit, isSelected, onSelect, selectable }: 
     );
 }
 
-export function HistoryViewer({ projectId, onViewCommit, canCompareDiffs }: HistoryViewerProps) {
+export function HistoryViewer({ projectId, branchRef, onViewCommit, canCompareDiffs }: HistoryViewerProps) {
     const [releases, setReleases] = useState<Release[]>([]);
     const [commits, setCommits] = useState<Commit[]>([]);
     const [loading, setLoading] = useState(true);
@@ -196,14 +197,15 @@ export function HistoryViewer({ projectId, onViewCommit, canCompareDiffs }: Hist
         setError(null);
 
         const fetchHistory = async () => {
+            const refQuery = branchRef ? `?ref=${encodeURIComponent(branchRef)}` : "";
             const [releasesResult, commitsResult] = await Promise.allSettled([
                 fetchJson<ReleasesResponse>(
-                    `/api/projects/${projectId}/releases`,
+                    `/api/projects/${projectId}/releases${refQuery}`,
                     { signal: controller.signal },
                     "Failed to load releases"
                 ),
                 fetchJson<CommitsResponse>(
-                    `/api/projects/${projectId}/commits`,
+                    `/api/projects/${projectId}/commits${refQuery}`,
                     { signal: controller.signal },
                     "Failed to load commits"
                 ),
@@ -259,7 +261,7 @@ export function HistoryViewer({ projectId, onViewCommit, canCompareDiffs }: Hist
         });
 
         return () => controller.abort();
-    }, [projectId]);
+    }, [projectId, branchRef]);
 
     if (loading) {
         return (
