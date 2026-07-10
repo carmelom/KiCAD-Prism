@@ -183,6 +183,12 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
         SCH: 0,
         PCB: 0,
     });
+    // "Open datasheet" feature: the datasheet URL of the currently-selected
+    // schematic symbol (null if the selection has none or isn't a symbol), plus
+    // when that selection last fired. The double-click trigger uses the timestamp
+    // as a freshness guard (see the datasheet effect below).
+    const selectedDatasheetUrlRef = useRef<string | null>(null);
+    const lastSchematicSelectAtRef = useRef<number>(0);
     const activeCommentContext: CommentContext | null = activeTab === "sch" ? "SCH" : activeTab === "pcb" ? "PCB" : null;
 
     const applyCommentModeToViewer = useCallback((viewer: ECadViewerElement | null, enabled: boolean) => {
@@ -264,6 +270,61 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
 
         return findDesignator(item);
     }, [normalizeDesignator]);
+
+    // Pull a usable datasheet URL off a selected schematic symbol. The live item
+    // is a SchematicSymbol instance, which exposes `datasheet`,
+    // `get_property_text("Datasheet")`, and a `properties` Map — we probe all
+    // three defensively. KiCad stores "~" (or empty) to mean "no datasheet", and
+    // we only surface web URLs for opening in a new tab.
+    const extractDatasheetUrl = useCallback((item: unknown): string | null => {
+        const normalize = (value: unknown): string | null => {
+            if (typeof value !== "string") return null;
+            const trimmed = value.trim();
+            if (!trimmed || trimmed === "~") return null;
+            if (!/^https?:\/\//i.test(trimmed)) return null;
+            return trimmed;
+        };
+
+        const read = (value: unknown, depth = 0): string | null => {
+            if (!value || typeof value !== "object" || depth > 3) return null;
+            const entry = value as Record<string, unknown>;
+
+            const direct = normalize(entry.datasheet ?? entry.Datasheet);
+            if (direct) return direct;
+
+            if (typeof entry.get_property_text === "function") {
+                try {
+                    const fromProperty = normalize(
+                        (entry.get_property_text as (name: string) => unknown)("Datasheet")
+                    );
+                    if (fromProperty) return fromProperty;
+                } catch {
+                    // noop
+                }
+            }
+
+            const properties = entry.properties;
+            if (properties instanceof Map) {
+                const prop = properties.get("Datasheet");
+                if (prop && typeof prop === "object") {
+                    const propEntry = prop as Record<string, unknown>;
+                    const fromMap = normalize(
+                        propEntry.text ?? propEntry.shown_text ?? propEntry.value
+                    );
+                    if (fromMap) return fromMap;
+                }
+            }
+
+            return read(entry.item, depth + 1) || read(entry.parent, depth + 1);
+        };
+
+        return read(item);
+    }, []);
+
+    const openDatasheet = useCallback((url: string | null) => {
+        if (!url) return;
+        window.open(url, "_blank", "noopener,noreferrer");
+    }, []);
 
     const getCrossProbeTargetContext = useCallback(
         (sourceContext: CrossProbeContext): CrossProbeContext =>
@@ -671,6 +732,8 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
         clearCrossProbeRetry("SCH");
         clearCrossProbeRetry("PCB");
         crossProbeRunIdRef.current = { SCH: 0, PCB: 0 };
+        selectedDatasheetUrlRef.current = null;
+        lastSchematicSelectAtRef.current = 0;
     }, [projectId, clearCrossProbeRetry]);
 
     useEffect(() => {
@@ -711,6 +774,10 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
             else if (e.detail?.filename) pageId = e.detail.filename;
             else if (e.detail?.sheetName) pageId = e.detail.sheetName;
             if (!pageId) return;
+            // Selection doesn't survive a sheet change; drop any stale datasheet
+            // so "D" can't open a symbol that's no longer on screen.
+            selectedDatasheetUrlRef.current = null;
+            lastSchematicSelectAtRef.current = 0;
             setActivePage(pageId);
             lastDrivenRef.current = pageId;
             // Sync the hierarchy panel/history to a page change that originated in the
@@ -804,8 +871,14 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
             runCrossProbe(targetViewer, sourceContext, designator);
         };
 
-        const onSchematicSelect = (event: Event) =>
+        const onSchematicSelect = (event: Event) => {
+            // Track the selected symbol's datasheet for the "D" / double-click
+            // open triggers. The timestamp is the double-click freshness guard.
+            const detail = (event as CustomEvent<KiCanvasSelectDetail>).detail;
+            selectedDatasheetUrlRef.current = extractDatasheetUrl(detail?.item);
+            lastSchematicSelectAtRef.current = Date.now();
             handleCrossProbeSelection("SCH", pcbViewerRef.current, event);
+        };
         const onPcbSelect = (event: Event) =>
             handleCrossProbeSelection("PCB", schematicViewerRef.current, event);
 
@@ -816,7 +889,52 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
             schematicViewer?.removeEventListener("kicanvas:select", onSchematicSelect as EventListener);
             pcbViewer?.removeEventListener("kicanvas:select", onPcbSelect as EventListener);
         };
-    }, [schematicViewerElement, pcbViewerElement, extractDesignatorFromSelection, runCrossProbe]);
+    }, [schematicViewerElement, pcbViewerElement, extractDesignatorFromSelection, extractDatasheetUrl, runCrossProbe]);
+
+    // Open the selected symbol's datasheet in a new tab: press "D", or
+    // double-click the symbol. Both act on the schematic tab only.
+    useEffect(() => {
+        const schematicViewer = schematicViewerElement;
+
+        // First click of a double-click re-fires selection on the item under the
+        // cursor, so a selection within this window means the cursor is genuinely
+        // over a symbol. Empty-space double-clicks fire no selection (the viewer
+        // only emits select when an item is hit), so the timestamp stays stale.
+        const DOUBLE_CLICK_FRESH_MS = 500;
+
+        const isEditableTarget = (target: EventTarget | null): boolean => {
+            const el = target as HTMLElement | null;
+            if (!el || typeof el.tagName !== "string") return false;
+            const tag = el.tagName.toLowerCase();
+            return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
+        };
+
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== "d" && event.key !== "D") return;
+            if (event.ctrlKey || event.metaKey || event.altKey) return;
+            if (activeTab !== "sch") return;
+            if (isEditableTarget(event.target)) return;
+            const url = selectedDatasheetUrlRef.current;
+            if (!url) return;
+            event.preventDefault();
+            openDatasheet(url);
+        };
+
+        const onDblClick = () => {
+            const url = selectedDatasheetUrlRef.current;
+            if (!url) return;
+            if (Date.now() - lastSchematicSelectAtRef.current > DOUBLE_CLICK_FRESH_MS) return;
+            openDatasheet(url);
+        };
+
+        document.addEventListener("keydown", onKeyDown);
+        schematicViewer?.addEventListener("dblclick", onDblClick);
+
+        return () => {
+            document.removeEventListener("keydown", onKeyDown);
+            schematicViewer?.removeEventListener("dblclick", onDblClick);
+        };
+    }, [schematicViewerElement, activeTab, openDatasheet]);
 
     useEffect(() => {
         if (activeTab === "pcb" && lastCrossProbeRef.current.SCH) {
