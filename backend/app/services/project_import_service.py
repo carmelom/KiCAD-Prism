@@ -721,6 +721,7 @@ def import_uploaded_archive(
     name = sanitize_project_name(display_name or filename)
     temp_dir = tempfile.mkdtemp(prefix="kicad_upload_")
     target_path: Optional[Path] = None
+    repo_id: Optional[str] = None
 
     try:
         extract_dir = Path(temp_dir) / "extracted"
@@ -750,10 +751,16 @@ def import_uploaded_archive(
         base_path = Path(project_service.PROJECTS_ROOT) / ("type1" if import_type == "type1" else "type2")
         base_path.mkdir(parents=True, exist_ok=True)
 
-        # Ensure a unique destination directory / name.
+        # Ensure a unique destination directory / name. Guard against both a
+        # colliding directory on disk AND a stale repository row in the DB
+        # (e.g. left behind by a previously failed import), since clone_path is
+        # UNIQUE in ws_repositories.
         unique_name = name
         counter = 1
-        while (base_path / unique_name).exists():
+        while (
+            (base_path / unique_name).exists()
+            or workspace.get_repository_by_clone_path(str(base_path / unique_name)) is not None
+        ):
             counter += 1
             unique_name = f"{name}-{counter}"
         target_path = base_path / unique_name
@@ -768,7 +775,7 @@ def import_uploaded_archive(
 
         imported_ids: List[str] = []
         if import_type == "type1":
-            cached = _resolve_cached_paths(str(target_path))
+            cached = resolve_cached_paths(str(target_path))
             project_id = workspace.register_project(
                 repo_id=repo_id,
                 name=unique_name,
@@ -783,7 +790,7 @@ def import_uploaded_archive(
                 full_project_path = target_path / rel_path if rel_path != "." else target_path
                 pro_files = list(full_project_path.glob("*.kicad_pro"))
                 board_name = pro_files[0].stem if pro_files else proj.name
-                cached = _resolve_cached_paths(str(full_project_path))
+                cached = resolve_cached_paths(str(full_project_path))
                 project_id = workspace.register_project(
                     repo_id=repo_id,
                     name=board_name,
@@ -803,7 +810,13 @@ def import_uploaded_archive(
         }
 
     except Exception:
-        # Roll back any moved content on failure.
+        # Roll back any moved content AND the registered repo row on failure, so
+        # a retry isn't blocked by an orphaned ws_repositories entry.
+        if repo_id is not None:
+            try:
+                workspace.delete_repository(repo_id)
+            except Exception:
+                pass
         if target_path is not None and target_path.exists():
             shutil.rmtree(target_path, ignore_errors=True)
         raise

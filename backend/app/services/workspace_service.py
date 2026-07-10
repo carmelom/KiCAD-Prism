@@ -230,6 +230,12 @@ class WorkspaceService:
             row = conn.execute("SELECT * FROM ws_repositories WHERE url=?", (url,)).fetchone()
         return self._row_to_dict(row) if row else None
 
+    def get_repository_by_clone_path(self, clone_path_abs: str) -> Optional[Dict[str, Any]]:
+        rel = self._rel_clone_path(clone_path_abs)
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM ws_repositories WHERE clone_path=?", (rel,)).fetchone()
+        return self._row_to_dict(row) if row else None
+
     def get_repository(self, repo_id: str) -> Optional[Dict[str, Any]]:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM ws_repositories WHERE id=?", (repo_id,)).fetchone()

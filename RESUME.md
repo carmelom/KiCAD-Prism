@@ -294,6 +294,44 @@ Chosen fix (backend-only, no viewer change, mirrors the flatten approach):
   tests still green. `py_compile` clean on both services.
 - **Requires rebuilding the backend to apply.**
 
+## Fixed (bughunt) — upload failed with "UNIQUE constraint failed: ws_repositories.clone_path"
+
+Root cause: `import_uploaded_archive` (`project_import_service.py`) called a
+**non-existent** `_resolve_cached_paths` (real name `resolve_cached_paths`) → `NameError`
+raised *after* `register_repository` had already committed the repo row. The rollback only
+removed the moved directory, leaving an **orphan `ws_repositories` row**. A retry reused the
+same name (dir was gone) → `INSERT` hit the `UNIQUE` clone_path constraint.
+
+Fix (backend-only; **requires backend rebuild**):
+- Corrected both `_resolve_cached_paths` calls → `resolve_cached_paths` (the actual bug).
+- Rollback now also `workspace.delete_repository(repo_id)` on failure (tracked `repo_id`),
+  so a partial import no longer leaves an orphan row.
+- Unique-name loop is now DB-aware: skips names whose `clone_path` already exists in
+  `ws_repositories` (new `workspace.get_repository_by_clone_path`), so **pre-existing**
+  orphan rows from earlier failed attempts no longer block a retry (retry lands on
+  `<name>-2`, etc.). Existing orphans are harmless (no projects → not listed).
+
+## Fixed (bughunt) — Firefox lands on wrong schematic sheet after redeploy (packaged only)
+
+Symptom: on the packaged deployment, Firefox opened a project on a **subsheet** instead
+of the true root; Chrome was fine; a hard refresh (Ctrl+Shift+R) fixed it.
+
+Root cause: the vendored viewer blobs (`/ecad-viewer.js`, `/glyph-full.js`,
+`/3d-viewer.js`) are loaded from **stable, unhashed URLs** (`index.html` `<script
+type=module>` + importmap), and `frontend/nginx.conf` set **no cache headers** for them.
+So across redeploys the URL never changes and Firefox reused its cached *pre-fix*
+`ecad-viewer.js` — the bundle without the `get_first_page` → `root.kicad_sch` landing
+preference (`vendor/ecad-viewer/src/kicanvas/project.ts:379`) — falling back to the old
+sort-first heuristic. Vite's app chunks are content-hashed so they self-bust; only the
+stable-named blobs went stale (hence hard-refresh fixed it, Chrome revalidated).
+
+Fix (`frontend/nginx.conf`; **requires frontend rebuild**): added cache-control rules —
+`Cache-Control: no-cache` (revalidate every load; cheap 304 via ETag/Last-Modified) for
+the unhashed viewer blobs (regex on `ecad-viewer|glyph-full|3d-viewer|parser.worker`) and
+for `index.html`; `public, immutable` + 1y for the content-hashed `/assets/`. nginx config
+parses clean (validated in `nginx:alpine`; only the expected unresolved `backend` upstream
+warning remains). Related to deferred bughunt #2 (stale-chunk fragility).
+
 ## Deferred (bughunt later — user's call)
 
 1. **Import dialog brightness/alpha looks off.** Overlay is `bg-black/80` (see
