@@ -1185,6 +1185,9 @@ export class Property {
     at: At;
     show_name = false;
     do_not_autoplace = false;
+    // Field visibility. KiCad >= 7 stores this as a property-level ``(hide yes)``
+    // sibling (no longer inside ``(effects)``), so parse it here.
+    hide = false;
     #effects?: Effects;
 
     constructor(
@@ -1199,14 +1202,21 @@ export class Property {
             P.pair("id", T.number),
             P.item("at", At),
             P.item("effects", Effects),
-            P.atom("show_name"),
-            P.atom("do_not_autoplace"),
+            P.pair("show_name", T.boolean),
+            P.pair("do_not_autoplace", T.boolean),
+            P.pair("hide", T.boolean),
         );
 
         this.#effects = parsed["effects"];
         delete parsed["effects"];
 
         Object.assign(this, parsed);
+
+        // Older files (KiCad 6) put ``hide`` inside ``(effects)`` as a bare atom;
+        // honour either location.
+        if (this.#effects?.hide) {
+            this.hide = true;
+        }
     }
 
     get effects(): Effects {

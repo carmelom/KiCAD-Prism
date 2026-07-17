@@ -455,6 +455,34 @@ required**):
   common/verified case). Uncommitted — commit `vendor/ecad-viewer/` source +
   regenerated blob + backend/frontend changes together after visual sign-off.
 
+## Fixed (bughunt) — schematic field visibility (KiCad 9 `(hide yes)`) (2026-07-17)
+
+Symptoms: hidden fields rendered (power symbol `#PWR` reference IDs shown), and
+user/custom fields on AOM/EOM symbols appeared "not rendered" (buried under the pile
+of wrongly-shown hidden fields — Footprint/Datasheet/Manufacturer/… all at `(at 0 0
+0)`). Root cause: KiCad ≥7/9 stores field visibility as a **property-level
+`(hide yes)` sibling** (verified 6873×, zero bare atoms; never inside `(effects)`),
+but the viewer's `Property` parser only had `P.atom("hide")` inside `Effects`, so
+visibility was never parsed → every field drawn.
+
+TWO independent viewer bugs (both fixed, blob rebuilt):
+1. **Visibility not parsed** → hidden fields (power `#PWR` Reference) drawn. Fix:
+   `kicad/schematic.ts` `Property` parses the property-level `(hide yes)` (+
+   `(show_name …)`/`(do_not_autoplace …)` as pairs, their KiCad 9 form) into a new
+   `Property.hide`, folding in the legacy hide-in-effects atom; `PropertyPainter`
+   (`viewers/schematic/painter.ts`) gates on `p.hide`. **[verified by user: power IDs
+   now hidden.]**
+2. **Custom fields never drawn.** `viewers/schematic/painters/symbol.ts`
+   `SchematicSymbolPainter` had a hardcoded allowlist
+   `visible_properties = {"Reference","Value"}` and `continue`d past every other field,
+   so user-defined fields (e.g. AOM/EOM `Connector A/B`) were never painted. Removed the
+   allowlist — now paints all fields and lets `PropertyPainter` skip hidden/empty ones
+   (safe only because bug 1's hide parsing now works). Matches eeschema.
+
+tsc 0 errors; frontend rebuilt; stack healthy. **Awaiting user visual confirmation of
+bug 2** (custom fields now render). Backend served blobs already carry correct data
+(custom `Connector A/B` survive flatten, unhidden, on the placed instance).
+
 ## Next task
 
 - Renderer fidelity (dashed lines + table cells) is DONE, verified, and pushed on

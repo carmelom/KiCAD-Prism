@@ -418,7 +418,9 @@ class PropertyPainter extends SchematicItemPainter {
     }
 
     paint(layer: ViewLayer, p: schematic_items.Property) {
-        if (p.effects.hide || !p.text) {
+        // p.hide folds in both the modern property-level (hide yes) and the
+        // legacy hide-inside-effects form.
+        if (p.hide || p.effects.hide || !p.text) {
             return;
         }
 

@@ -67,8 +67,6 @@ export class LibSymbolPainter extends SchematicItemPainter {
     }
 }
 
-const visible_properties = new Set(["Reference", "Value"]);
-
 export class SchematicSymbolPainter extends SchematicItemPainter {
     classes = [schematic_items.SchematicSymbol];
 
@@ -115,11 +113,10 @@ export class SchematicSymbolPainter extends SchematicItemPainter {
             layer.name == LayerNames.symbol_field ||
             layer.name == LayerNames.interactive
         ) {
-            for (const [_, p] of si.properties) {
-                if (!visible_properties.has(p.name)) {
-                    continue;
-                }
-
+            // Paint every field; PropertyPainter skips those that are hidden
+            // (respecting KiCad's (hide yes)) or empty. This includes
+            // user-defined custom fields, matching eeschema.
+            for (const [, p] of si.properties) {
                 this.view_painter.paint_item(layer, p);
             }
         }
