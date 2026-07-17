@@ -8,3 +8,4 @@ requests
 PyJWT[crypto]
 kiutils
 python-multipart
+zstandard

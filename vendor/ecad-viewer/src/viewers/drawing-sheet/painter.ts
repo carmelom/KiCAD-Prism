@@ -218,6 +218,33 @@ class TbTextPainter extends ItemPainter {
     }
 }
 
+class BitmapPainter extends ItemPainter {
+    classes = [drawing_sheet.Bitmap];
+
+    override layers_for(item: unknown): string[] {
+        return [ViewLayerNames.drawing_sheet];
+    }
+
+    paint(layer: ViewLayer, b: drawing_sheet.Bitmap) {
+        const img = b.img;
+        // Skip until the logo has decoded; the SchematicViewer repaints on load.
+        if (!img || !img.complete || !img.naturalWidth) {
+            return;
+        }
+
+        // Bitmap position is the image centre; KiCad draws it regardless of the
+        // title-block margin, so don't constrain to the margin bbox.
+        const pos = offset_point(b.parent, b.pos.position, b.pos.anchor, false);
+        if (!pos) {
+            return;
+        }
+
+        this.gfx.state.push();
+        this.gfx.image(img, pos.x, pos.y, b.scale, b.ppi ?? undefined);
+        this.gfx.state.pop();
+    }
+}
+
 export class DrawingSheetPainter extends DocumentPainter {
     constructor(gfx: Renderer, layers: ViewLayerSet, theme: BaseTheme) {
         super(gfx, layers, theme);
@@ -225,6 +252,7 @@ export class DrawingSheetPainter extends DocumentPainter {
             new LinePainter(this, gfx),
             new RectPainter(this, gfx),
             new TbTextPainter(this, gfx),
+            new BitmapPainter(this, gfx),
         ];
     }
 

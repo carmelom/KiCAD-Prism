@@ -91,6 +91,14 @@ export class KicadSch {
     sheets: SchematicSheet[] = [];
     is_converted_from_ad = false;
 
+    // Per-instance title-block variables supplied by the host (the KiCad-Prism
+    // backend computes these from the hierarchy). Used to resolve ${#} (sheet
+    // number), ${##} (sheet count) and ${SHEETPATH} in the drawing-sheet title
+    // block. Left undefined for standalone use (the viewer then mocks them).
+    sheet_number?: string;
+    sheet_count?: string;
+    sheet_path_label?: string;
+
     public get bbox() {
         return DrawingSheet.default().page_bbox;
     }
@@ -231,6 +239,25 @@ export class KicadSch {
     resolve_text_var(name: string): string | undefined {
         if (name == "FILENAME") {
             return this.filename;
+        }
+
+        // Per-instance title-block variables (supplied by the host). Fall through
+        // to the viewer's default mocks when not provided.
+        switch (name) {
+            case "#":
+                if (this.sheet_number !== undefined) return this.sheet_number;
+                break;
+            case "##":
+                if (this.sheet_count !== undefined) return this.sheet_count;
+                break;
+            case "SHEETPATH":
+                if (this.sheet_path_label !== undefined)
+                    return this.sheet_path_label;
+                break;
+            case "KICAD_VERSION":
+                return this.generator_version
+                    ? `KiCad ${this.generator_version}`
+                    : "KiCad";
         }
 
         // Cross-reference

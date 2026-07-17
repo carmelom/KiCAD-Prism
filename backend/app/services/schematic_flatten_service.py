@@ -128,6 +128,20 @@ def _rewrite(
     return text
 
 
+def _sheet_path_label(display_path: Optional[str], is_root: bool) -> str:
+    """KiCad-style ``${SHEETPATH}``: ``/`` at the root, ``/Name/.../`` below it.
+
+    ``display_path`` looks like ``/<root-sheet>/<child>/...``; the leading root
+    segment is dropped so the root renders as ``/`` (matching eeschema).
+    """
+    if is_root or not display_path:
+        return "/"
+    segments = [s for s in display_path.split("/") if s]
+    if len(segments) <= 1:
+        return "/"
+    return "/" + "/".join(segments[1:]) + "/"
+
+
 def build_flattened_blobs(
     root_filename: str,
     root_content: str,
@@ -185,6 +199,12 @@ def build_flattened_blobs(
                 _rewrite(text, reference_by_symbol, sheetfile_by_sheet)
             ),
             "isRoot": is_root,
+            # Per-instance title-block variables (${#}, ${SHEETPATH}); ${##} is
+            # filled in below once the full instance count is known. The KiCad
+            # ${SHEETPATH} is "/" at the root and "/Name/.../" below it (the
+            # display path minus the leading root-sheet segment).
+            "sheetNumber": node.get("page"),
+            "sheetPathLabel": _sheet_path_label(node.get("displayPath"), is_root),
         })
 
         for child, child_rel, child_name in child_plan:
@@ -192,6 +212,11 @@ def build_flattened_blobs(
 
     root_rel = os.path.normpath(root_filename.replace("\\", "/"))
     emit(root_node, root_content, os.path.dirname(root_rel), "root.kicad_sch", True)
+
+    # ${##} is the total sheet-instance count, known only once the tree is walked.
+    sheet_count = len(blobs)
+    for blob in blobs:
+        blob["sheetCount"] = sheet_count
     return blobs
 
 

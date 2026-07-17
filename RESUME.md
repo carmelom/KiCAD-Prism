@@ -395,6 +395,66 @@ no vendored-viewer change; tsc clean; needs a frontend rebuild.
     reproduces byte-identically (deferred — heavy; inputs/entrypoint verified, blob is the
     already-validated artifact). Branch `chore/vendor-ecad-viewer` is unpushed/unmerged.
 
+## Feature: custom schematic sheet templates (.kicad_wks) (2026-07-17)
+
+The viewer ignored a project's **custom drawing-sheet template** (page frame +
+title block) and always drew the bundled default. Root cause: the custom
+`zuriq_sheet.kicad_wks` is **embedded** (base64 + Zstd) in the root schematic's
+`(embedded_files)` block (referenced via `page_layout_descr_file:
+"kicad-embed://…"`), but the vendored ecad-viewer never parsed embedded files or
+any `.kicad_wks` — the only worksheet source was `DrawingSheet.default()`. Verified
+against `kicad-zuriq-1-lab-map` (custom template has literals `© 2025-2026 ZuriQ` /
+`Engineer:` that never rendered; the shown "Ecad Viewer inspired by KiCanvas" was
+the default template's `${KICAD_VERSION}` mock).
+
+Implemented (backend-authoritative + minimal viewer change; **all three rebuilds
+required**):
+- **Backend** `services/schematic_worksheet_service.py` — stdlib+`zstandard`,
+  host-testable: `extract_embedded_worksheet` / `resolve_worksheet` (base64-decode +
+  Zstd-decompress the `(type worksheet)` embed; honors external-path
+  `page_layout_descr_file`, else embedded, else None). Added `zstandard` to
+  `backend/requirements.txt`. Tests: `tests/test_schematic_worksheet_service.py`
+  (8, green).
+- **Backend** `/schematic/flattened` now returns `drawingSheet` (wks text|null) plus
+  per-blob `sheetNumber`/`sheetCount`/`sheetPathLabel` (KiCad `${#}`/`${##}`/
+  `${SHEETPATH}`; root SHEETPATH `/`, subsheet `/Name/…/`). `_sheet_path_label`
+  helper in `schematic_flatten_service.py`. Both commit + working-tree modes.
+- **Vendored viewer**: `Project.load` captures a `.kicad_wks` blob into
+  `worksheet_text`; `SchematicViewer.load` builds `new DrawingSheet(text)` from
+  `src.project.worksheet_text` (race-free — persists across switchPage; try/catch →
+  default fallback). `KicadSch` gained `sheet_number/count/path_label` + resolves
+  `#`/`##`/`SHEETPATH`; **`${KICAD_VERSION}` now `KiCad <generator_version>`**
+  (was the junk mock). `ecad-blob` carries `sheet_number/count/path` attrs
+  (decorator maps `_`→first `-`, i.e. `sheet-number`). `EcadBlob` type extended.
+- **Frontend** `visualizer.tsx`: threads `data.drawingSheet` as a
+  `prism-worksheet.kicad_wks` ecad-blob + per-blob metadata attrs; resets on
+  project/commit change.
+- **Rebuilt**: viewer blob (`vendor/ecad-viewer` docker `build:no-check`, tsc/lint:types
+  0 errors) → `frontend/public/ecad-viewer.js`; backend image (zstandard) + frontend
+  image. Stack verified: containers run the new images, `zstandard 0.25.0` baked,
+  endpoint returns the real ZuriQ template + metadata, frontend serves the new blob,
+  backend+frontend HTTP 200.
+- **Fix (worksheet graphics/logo):** the DrawingSheetPainter only had Line/Rect/
+  TbText painters — `(bitmap …)` items (an imported SVG logo is rasterized to an
+  embedded PNG) were parsed but never drawn, and the `Bitmap` parser read a stale
+  `pngdata` field instead of KiCad's `(data "chunk" …)`. Rewrote `Bitmap`
+  (`kicad/drawing-sheet.ts`) to join the base64 `(data …)` chunks + build an `<img>`
+  + `get_image_ppi` (mirrors schematic `Image`); added `BitmapPainter`
+  (`viewers/drawing-sheet/painter.ts`) using `gfx.image(img, x, y, scale, ppi)` at
+  the anchored centre (unconstrained). Bitmaps decode async, so
+  `SchematicViewer.#repaint_when_images_load` repaints once each logo `load`s
+  (BitmapPainter skips-not-throws until `img.complete && naturalWidth`, unlike the
+  schematic ImagePainter which throws). Blob rebuilt (tsc 0 errors) + frontend image
+  rebuilt; stack healthy.
+- **STATUS: code complete + wired + stack healthy; awaiting user visual confirmation**
+  that the custom ZuriQ frame/title block (with `© 2025-2026 ZuriQ`, `Engineer:`,
+  real KiCad version, real sheet numbers, **and the logo graphic**) now renders in
+  place of the default.
+- Scope notes: PCB custom worksheet not wired (schematic-only); external-path
+  templates that live in an uncloned submodule fall back to default (embedded is the
+  common/verified case). Uncommitted — commit `vendor/ecad-viewer/` source +
+  regenerated blob + backend/frontend changes together after visual sign-off.
+
 ## Next task
 
 - Renderer fidelity (dashed lines + table cells) is DONE, verified, and pushed on

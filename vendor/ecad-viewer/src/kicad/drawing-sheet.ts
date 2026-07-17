@@ -6,8 +6,10 @@
 
 import { Color } from "../base/color";
 import { BBox, Vec2 } from "../base/math";
+import { html } from "../base/web-components";
 import { Paper, expand_text_vars } from "./common";
 import default_sheet from "./default_drawing_sheet.kicad_wks";
+import { get_image_ppi } from "./get_image_ppi";
 import { P, T, parse_expr, type Parseable } from "./parser";
 
 export type DrawingSheetDocument = {
@@ -106,25 +108,29 @@ export class DrawingSheet {
     }
 
     resolve_text_var(name: string): string | undefined {
-        switch (name) {
-            case "PAPER":
-                return this.paper?.size || "";
-            // TODO: Mock values for now, should be provided by the project
-            // when that's implemented.
-            case "#":
-                // Sheet number
-                return "1";
-            case "##":
-                // Sheet count
-                return "1";
-            case "SHEETPATH":
-                // Sheet path (hierarchical path)
-                return "/";
-            case "KICAD_VERSION":
-                // KiCAD Version
-                return "Ecad Viewer inspired by KiCanvas";
+        if (name === "PAPER") {
+            return this.paper?.size || "";
         }
-        return this.document?.resolve_text_var(name);
+
+        // Prefer host-provided values (sheet number/count/path, KiCad version,
+        // title-block fields) from the document.
+        const from_document = this.document?.resolve_text_var(name);
+        if (from_document !== undefined) {
+            return from_document;
+        }
+
+        // Fallback mocks for standalone use when the host provides nothing.
+        switch (name) {
+            case "#":
+                return "1"; // Sheet number
+            case "##":
+                return "1"; // Sheet count
+            case "SHEETPATH":
+                return "/"; // Hierarchical sheet path
+            case "KICAD_VERSION":
+                return "KiCad";
+        }
+        return undefined;
     }
 }
 
@@ -262,9 +268,17 @@ export class Polygon extends DrawingSheetItem {
 }
 
 export class Bitmap extends DrawingSheetItem {
-    scale: number;
+    scale = 1;
     pos: Coordinate;
-    pngdata: string;
+    // Base64 PNG payload. KiCad stores it as ``(data "chunk" "chunk" ...)`` (older
+    // files used ``pngdata``); both are handled below.
+    data = "";
+    ppi: number | null = null;
+    #img?: HTMLImageElement;
+
+    get img() {
+        return this.#img;
+    }
 
     constructor(expr: Parseable, parent: DrawingSheet) {
         super(parent);
@@ -275,10 +289,24 @@ export class Bitmap extends DrawingSheetItem {
                 P.start("bitmap"),
                 P.item("pos", Coordinate),
                 P.pair("scale", T.number),
-                P.pair("pngdata", T.string),
                 ...DrawingSheetItem.common_expr_defs,
             ),
         );
+
+        // The image bytes live in a multi-atom ``(data "chunk" "chunk" ...)``
+        // list; join the base64 chunks (mirrors the schematic ``Image`` parser).
+        for (const it of expr) {
+            if (Array.isArray(it) && it.length && it[0] === "data") {
+                this.data = it.splice(1).join("");
+                break;
+            }
+        }
+
+        if (this.data) {
+            this.ppi = get_image_ppi(this.data);
+            this.#img = html`<img
+                src="data:image/png;base64,${this.data}" />` as HTMLImageElement;
+        }
     }
 }
 

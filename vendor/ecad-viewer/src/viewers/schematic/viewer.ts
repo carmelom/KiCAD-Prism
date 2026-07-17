@@ -9,7 +9,8 @@ import { is_showing_design_block } from "../../ecad-viewer/ecad_viewer_global";
 import { Circle, Color, Polygon, Polyline, Renderer } from "../../graphics";
 import { Canvas2DRenderer } from "../../graphics/canvas2d";
 import { NullRenderer } from "../../graphics/null-renderer";
-import { type SchematicTheme } from "../../kicad";
+import { DrawingSheet, type SchematicTheme } from "../../kicad";
+import { Bitmap } from "../../kicad/drawing-sheet";
 import { HierarchicalSheetPin, KicadSch, Label } from "../../kicad/schematic";
 import { DocumentViewer } from "../base/document-viewer";
 import {
@@ -74,8 +75,58 @@ export class SchematicViewer extends DocumentViewer<
         this.#focus_net_item = ref;
     }
 
+    // Tracks which worksheet text the current drawing_sheet was built from, so we
+    // only re-parse the (project-wide) custom template when it actually changes.
+    #applied_worksheet_text?: string;
+
+    /**
+     * Apply the project's custom drawing-sheet (.kicad_wks) template, if any, so
+     * the viewer renders the project's own title block/frame instead of the
+     * bundled default. Falls back to the default when none is supplied or parsing
+     * fails. Persists across sheet switches (paint() re-binds the document).
+     */
+    #apply_custom_drawing_sheet(src: KicadSch) {
+        const text = src.project?.worksheet_text;
+        if (text === this.#applied_worksheet_text && this.drawing_sheet) {
+            return;
+        }
+        this.#applied_worksheet_text = text;
+        if (text) {
+            try {
+                this.drawing_sheet = new DrawingSheet(text);
+                this.#repaint_when_images_load(this.drawing_sheet);
+                return;
+            } catch {
+                // fall through to the bundled default on a malformed template
+            }
+        }
+        this.drawing_sheet = DrawingSheet.default();
+    }
+
+    /**
+     * Drawing-sheet bitmaps (e.g. an imported logo) decode asynchronously. The
+     * BitmapPainter skips them until ready, so repaint once each finishes loading.
+     */
+    #repaint_when_images_load(sheet: DrawingSheet) {
+        for (const item of sheet.drawings) {
+            if (!(item instanceof Bitmap)) continue;
+            const img = item.img;
+            if (!img || (img.complete && img.naturalWidth)) continue;
+            const on_ready = () => {
+                img.removeEventListener("load", on_ready);
+                // Only repaint if this sheet is still the active one.
+                if (this.drawing_sheet === sheet) {
+                    this.paint();
+                    this.draw();
+                }
+            };
+            img.addEventListener("load", on_ready);
+        }
+    }
+
     override async load(src: KicadSch) {
         this.schematic_renderer.reset_scene_bbox();
+        this.#apply_custom_drawing_sheet(src);
         await super.load(src);
         this.dispatchEvent(new SheetLoadEvent(src.filename));
     }

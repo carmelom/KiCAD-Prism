@@ -388,6 +388,9 @@ export class ECadViewer extends KCUIElement implements InputContainer {
             blobs.push({
                 filename: blob_elm.filename,
                 content: blob_elm.content,
+                sheet_number: blob_elm.sheet_number ?? undefined,
+                sheet_count: blob_elm.sheet_count ?? undefined,
+                sheet_path: blob_elm.sheet_path ?? undefined,
             });
         }
 
@@ -640,6 +643,16 @@ class EcadBlobElement extends CustomElement {
 
     @attribute({ type: String })
     content: string;
+
+    // Optional per-instance title-block metadata (see EcadBlob).
+    @attribute({ type: String })
+    sheet_number: string | null;
+
+    @attribute({ type: String })
+    sheet_count: string | null;
+
+    @attribute({ type: String })
+    sheet_path: string | null;
 }
 
 window.customElements.define("ecad-blob", EcadBlobElement);

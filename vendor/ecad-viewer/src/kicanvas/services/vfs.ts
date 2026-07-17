@@ -10,6 +10,11 @@ import { basename } from "../../base/paths";
 export interface EcadBlob {
     filename: string;
     content: string;
+    // Optional per-instance title-block metadata (KiCad-Prism supplies these for
+    // flattened schematic blobs so ${#}/${##}/${SHEETPATH} resolve correctly).
+    sheet_number?: string;
+    sheet_count?: string;
+    sheet_path?: string;
 }
 export interface EcadSources {
     urls: string[];

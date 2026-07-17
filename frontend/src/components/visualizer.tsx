@@ -49,6 +49,10 @@ const CROSS_PROBE_RETRY_DELAY_MS = 120;
 type ViewerBlobSource = {
     filename: string;
     content: string;
+    // Per-instance title-block metadata for flattened schematic blobs.
+    sheetNumber?: string;
+    sheetCount?: string;
+    sheetPath?: string;
 };
 
 const buildViewerKey = (
@@ -94,9 +98,15 @@ function EcadViewerHost({ viewerKey, sources, setViewerRef }: EcadViewerHostProp
                 const blob = document.createElement("ecad-blob") as HTMLElement & {
                     filename?: string;
                     content?: string;
+                    sheet_number?: string;
+                    sheet_count?: string;
+                    sheet_path?: string;
                 };
                 blob.filename = source.filename;
                 blob.content = source.content;
+                if (source.sheetNumber !== undefined) blob.sheet_number = source.sheetNumber;
+                if (source.sheetCount !== undefined) blob.sheet_count = source.sheetCount;
+                if (source.sheetPath !== undefined) blob.sheet_path = source.sheetPath;
                 activeViewer.appendChild(blob);
             }
 
@@ -147,8 +157,18 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
     // One pre-annotated .kicad_sch blob per sheet instance (from /schematic/flattened):
     // this is what makes the viewer render correct per-instance reference designators.
     const [schematicBlobs, setSchematicBlobs] = useState<
-        { filename: string; sheetPath: string; content: string; isRoot?: boolean }[]
+        {
+            filename: string;
+            sheetPath: string;
+            content: string;
+            isRoot?: boolean;
+            sheetNumber?: string | number | null;
+            sheetCount?: string | number | null;
+            sheetPathLabel?: string | null;
+        }[]
     >([]);
+    // Project's custom drawing-sheet (.kicad_wks) template text, if any.
+    const [drawingSheet, setDrawingSheet] = useState<string | null>(null);
     const [pcbContent, setPcbContent] = useState<string | null>(null);
     const [modelUrl, setModelUrl] = useState<string | null>(null);
     const [ibomUrl, setIbomUrl] = useState<string | null>(null);
@@ -542,6 +562,7 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
         setModelUrl(null);
         setIbomUrl(null);
         setSchematicBlobs([]);
+        setDrawingSheet(null);
         setPcbContent(null);
         setSchematicContentLoaded(false);
         setPcbContentLoaded(false);
@@ -657,9 +678,11 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
                         const data = await res.json();
                         if (signal.aborted) return;
                         setSchematicBlobs(Array.isArray(data.blobs) ? data.blobs : []);
+                        setDrawingSheet(typeof data.drawingSheet === "string" ? data.drawingSheet : null);
                     } else {
                         console.error("Schematic not found");
                         setSchematicBlobs([]);
+                        setDrawingSheet(null);
                     }
                 } catch (err) {
                     if (!isAbortError(err)) {
@@ -717,6 +740,7 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
         setSchematicContentLoaded(false);
         setPcbContentLoaded(false);
         setSchematicBlobs([]);
+        setDrawingSheet(null);
         setPcbContent(null);
         setModelUrl(null);
         setIbomUrl(null);
@@ -1107,10 +1131,23 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
     const shouldShowOverlay =
         (activeTab === "sch" && Boolean(schematicBlobs.length && schematicViewerElement)) ||
         (activeTab === "pcb" && Boolean(pcbContent && pcbViewerElement));
-    const schematicSources = useMemo<ViewerBlobSource[]>(
-        () => schematicBlobs.map(({ filename, content }) => ({ filename, content })),
-        [schematicBlobs],
-    );
+    const schematicSources = useMemo<ViewerBlobSource[]>(() => {
+        const sources: ViewerBlobSource[] = schematicBlobs.map(
+            ({ filename, content, sheetNumber, sheetCount, sheetPathLabel }) => ({
+                filename,
+                content,
+                sheetNumber: sheetNumber != null ? String(sheetNumber) : undefined,
+                sheetCount: sheetCount != null ? String(sheetCount) : undefined,
+                sheetPath: sheetPathLabel != null ? String(sheetPathLabel) : undefined,
+            }),
+        );
+        // The project's custom drawing-sheet template travels as its own blob so
+        // the viewer renders the project's frame/title block instead of the default.
+        if (drawingSheet) {
+            sources.push({ filename: "prism-worksheet.kicad_wks", content: drawingSheet });
+        }
+        return sources;
+    }, [schematicBlobs, drawingSheet]);
     const pcbSources = useMemo<ViewerBlobSource[]>(
         () => (pcbContent
             ? [{ filename: "board.kicad_pcb", content: pcbContent }]

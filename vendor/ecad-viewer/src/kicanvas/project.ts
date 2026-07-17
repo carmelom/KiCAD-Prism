@@ -54,6 +54,14 @@ export class Project extends EventTarget implements IDisposable {
     _project_name: string;
     active_sch_file_name?: string;
     _found_cjk = false;
+    // Raw custom drawing-sheet (.kicad_wks) text supplied by the host, if any.
+    // The SchematicViewer builds its DrawingSheet from this instead of the
+    // bundled default. Undefined => use the default worksheet.
+    _worksheet_text?: string;
+
+    get worksheet_text(): string | undefined {
+        return this._worksheet_text;
+    }
 
     find_labels_by_name(name: string) {
         return this._label_name_refs.get(name);
@@ -139,6 +147,9 @@ export class Project extends EventTarget implements IDisposable {
                 );
                 const data = JSON.parse(blob.content);
                 this.settings = ProjectSettings.load(data);
+            } else if (blob.filename.endsWith(".kicad_wks")) {
+                // Host-supplied custom drawing-sheet template.
+                this._worksheet_text = blob.content;
             }
         }
 
@@ -274,6 +285,15 @@ export class Project extends EventTarget implements IDisposable {
         if (doc instanceof KicadPCB) this._pcb.push(doc);
         else {
             this._sch.push(doc);
+
+            // Carry host-supplied per-instance title-block metadata onto the
+            // parsed schematic so ${#}/${##}/${SHEETPATH} resolve per instance.
+            if (blob.sheet_number !== undefined)
+                doc.sheet_number = blob.sheet_number;
+            if (blob.sheet_count !== undefined)
+                doc.sheet_count = blob.sheet_count;
+            if (blob.sheet_path !== undefined)
+                doc.sheet_path_label = blob.sheet_path;
 
             for (const it of doc.labels) {
                 if (it.uuid) {

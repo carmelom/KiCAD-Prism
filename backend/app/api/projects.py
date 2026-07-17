@@ -23,6 +23,7 @@ from app.services import (
     project_service,
     schematic_flatten_service,
     schematic_hierarchy_service,
+    schematic_worksheet_service,
 )
 from app.services.workspace_service import workspace
 from app.services.comments_url_service import build_comments_source_urls, resolve_comments_base_url
@@ -1236,17 +1237,51 @@ async def get_project_schematic_flattened(
                     return None
                 return child.content.decode("utf-8", errors="replace")
 
+            root_content = root_file.content.decode("utf-8", errors="replace")
             blobs = schematic_flatten_service.build_flattened_blobs(
                 root_file.name,
-                root_file.content.decode("utf-8", errors="replace"),
+                root_content,
                 load_sheet,
             )
-            return {"blobs": blobs}
+            try:
+                pro_file = _read_configured_commit_file(
+                    project, commit, "*.kicad_pro", not_found_detail="Project settings not found"
+                )
+                pro_content = pro_file.content.decode("utf-8", errors="replace")
+            except HTTPException:
+                pro_content = None
+            drawing_sheet = schematic_worksheet_service.resolve_worksheet(
+                root_content, pro_content, load_sheet
+            )
+            return {"blobs": blobs, "drawingSheet": drawing_sheet}
 
         main_path = project_service.find_schematic_file(project.path)
         if not main_path:
             raise HTTPException(status_code=404, detail="Schematic not found")
-        return {"blobs": schematic_flatten_service.build_flattened_blobs_from_directory(main_path)}
+        blobs = schematic_flatten_service.build_flattened_blobs_from_directory(main_path)
+        with open(main_path, "r", encoding="utf-8", errors="replace") as handle:
+            root_content = handle.read()
+        root_dir = os.path.dirname(os.path.abspath(main_path))
+
+        def load_project_file(rel_path: str) -> Optional[str]:
+            candidate = os.path.normpath(os.path.join(root_dir, rel_path))
+            if not candidate.startswith(root_dir):
+                return None
+            try:
+                with open(candidate, "r", encoding="utf-8", errors="replace") as fh:
+                    return fh.read()
+            except (FileNotFoundError, IsADirectoryError, OSError):
+                return None
+
+        pro_content = None
+        for entry in os.listdir(root_dir):
+            if entry.endswith(".kicad_pro"):
+                pro_content = load_project_file(entry)
+                break
+        drawing_sheet = schematic_worksheet_service.resolve_worksheet(
+            root_content, pro_content, load_project_file
+        )
+        return {"blobs": blobs, "drawingSheet": drawing_sheet}
     except HTTPException:
         raise
     except ValueError as error:
