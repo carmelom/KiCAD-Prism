@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,9 @@ from app.services import (
     project_import_service,
     project_properties_service,
     project_service,
+    schematic_flatten_service,
+    schematic_hierarchy_service,
+    schematic_worksheet_service,
 )
 from app.services.workspace_service import workspace
 from app.services.comments_url_service import build_comments_source_urls, resolve_comments_base_url
@@ -566,6 +569,31 @@ async def import_project(request: ImportRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/upload", dependencies=[Depends(require_designer)])
+async def upload_project(
+    file: UploadFile = File(...),
+    name: Optional[str] = Form(None),
+):
+    """Import a KiCad project from an uploaded .zip archive.
+
+    Unlike /import (which clones a git remote), this ingests a local archive:
+    unpack, git-init, discover project(s), register. Returns the created project id(s).
+    """
+    content = await file.read()
+    try:
+        result = project_import_service.import_uploaded_archive(
+            content,
+            file.filename or "uploaded-project.zip",
+            display_name=name,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    file_service.invalidate_file_listing_cache()
+    return result
 
 @router.get("/jobs/{job_id}")
 async def get_job_status(job_id: str):
@@ -1120,6 +1148,144 @@ async def get_project_subsheets(
     # Convert filenames to URLs
     subsheet_urls = [{"name": s, "url": f"/api/projects/{project_id}/asset/{s}"} for s in subsheets]
     return {"files": subsheet_urls}
+
+@router.get("/{project_id}/schematic/hierarchy")
+async def get_project_schematic_hierarchy(
+    project_id: str,
+    commit: Optional[str] = None,
+    user: AuthenticatedUser = Depends(require_viewer),
+):
+    """Resolve the schematic sheet hierarchy: the root->subsheet instance tree
+    (with page numbers) plus per-instance symbol references."""
+    project = get_project_for_role_or_404(project_id, user.role)
+
+    try:
+        if commit:
+            config = _path_config_from_commit(project, commit)
+            root_file = _read_configured_commit_file(
+                project,
+                commit,
+                config.schematic or "*.kicad_sch",
+                not_found_detail="Schematic not found",
+            )
+            repo_path, sub_path = _repo_context(project)
+            root_dir = posixpath.dirname(root_file.path)
+
+            def load_sheet(filename: str) -> Optional[str]:
+                tree_path = _join_relative_paths(root_dir, filename)
+                try:
+                    child = file_service.read_file_from_commit(
+                        repo_path,
+                        commit,
+                        tree_path,
+                        relative_prefix=sub_path,
+                        not_found_detail="Sheet not found",
+                    )
+                except HTTPException:
+                    return None
+                return child.content.decode("utf-8", errors="replace")
+
+            return schematic_hierarchy_service.resolve_from_content(
+                root_file.name,
+                root_file.content.decode("utf-8", errors="replace"),
+                load_sheet,
+            )
+
+        main_path = project_service.find_schematic_file(project.path)
+        if not main_path:
+            raise HTTPException(status_code=404, detail="Schematic not found")
+        return schematic_hierarchy_service.resolve_from_directory(main_path)
+    except HTTPException:
+        raise
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+@router.get("/{project_id}/schematic/flattened")
+async def get_project_schematic_flattened(
+    project_id: str,
+    commit: Optional[str] = None,
+    user: AuthenticatedUser = Depends(require_viewer),
+):
+    """Return one annotated .kicad_sch blob per sheet instance, so the (filename-keyed)
+    viewer renders correct per-instance reference designators. Root is first, named
+    'root.kicad_sch'; other instances get unique synthetic filenames."""
+    project = get_project_for_role_or_404(project_id, user.role)
+
+    try:
+        if commit:
+            config = _path_config_from_commit(project, commit)
+            root_file = _read_configured_commit_file(
+                project,
+                commit,
+                config.schematic or "*.kicad_sch",
+                not_found_detail="Schematic not found",
+            )
+            repo_path, sub_path = _repo_context(project)
+            root_dir = posixpath.dirname(root_file.path)
+
+            def load_sheet(rel_path: str) -> Optional[str]:
+                tree_path = _join_relative_paths(root_dir, rel_path)
+                try:
+                    child = file_service.read_file_from_commit(
+                        repo_path,
+                        commit,
+                        tree_path,
+                        relative_prefix=sub_path,
+                        not_found_detail="Sheet not found",
+                    )
+                except HTTPException:
+                    return None
+                return child.content.decode("utf-8", errors="replace")
+
+            root_content = root_file.content.decode("utf-8", errors="replace")
+            blobs = schematic_flatten_service.build_flattened_blobs(
+                root_file.name,
+                root_content,
+                load_sheet,
+            )
+            try:
+                pro_file = _read_configured_commit_file(
+                    project, commit, "*.kicad_pro", not_found_detail="Project settings not found"
+                )
+                pro_content = pro_file.content.decode("utf-8", errors="replace")
+            except HTTPException:
+                pro_content = None
+            drawing_sheet = schematic_worksheet_service.resolve_worksheet(
+                root_content, pro_content, load_sheet
+            )
+            return {"blobs": blobs, "drawingSheet": drawing_sheet}
+
+        main_path = project_service.find_schematic_file(project.path)
+        if not main_path:
+            raise HTTPException(status_code=404, detail="Schematic not found")
+        blobs = schematic_flatten_service.build_flattened_blobs_from_directory(main_path)
+        with open(main_path, "r", encoding="utf-8", errors="replace") as handle:
+            root_content = handle.read()
+        root_dir = os.path.dirname(os.path.abspath(main_path))
+
+        def load_project_file(rel_path: str) -> Optional[str]:
+            candidate = os.path.normpath(os.path.join(root_dir, rel_path))
+            if not candidate.startswith(root_dir):
+                return None
+            try:
+                with open(candidate, "r", encoding="utf-8", errors="replace") as fh:
+                    return fh.read()
+            except (FileNotFoundError, IsADirectoryError, OSError):
+                return None
+
+        pro_content = None
+        for entry in os.listdir(root_dir):
+            if entry.endswith(".kicad_pro"):
+                pro_content = load_project_file(entry)
+                break
+        drawing_sheet = schematic_worksheet_service.resolve_worksheet(
+            root_content, pro_content, load_project_file
+        )
+        return {"blobs": blobs, "drawingSheet": drawing_sheet}
+    except HTTPException:
+        raise
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 @router.get("/{project_id}/pcb")
 async def get_project_pcb(

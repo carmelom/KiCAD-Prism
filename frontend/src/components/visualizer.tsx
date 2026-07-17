@@ -1,14 +1,17 @@
 import { lazy, Suspense, useEffect, useState, useCallback, useRef, useLayoutEffect, useMemo } from "react";
-import { Cpu, Box, FileText, MessageSquarePlus, MessageSquare, GitBranch, CircuitBoard, Link2, Copy, Check } from "lucide-react";
+import { Cpu, Box, FileText, MessageSquarePlus, MessageSquare, GitBranch, CircuitBoard, Link2, Copy, Check, ArrowLeft, ArrowUp, ArrowRight, ListTree, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CommentOverlay } from "./comment-overlay";
 import { CommentForm } from "./comment-form";
 import { CommentPanel } from "./comment-panel";
+import { SchematicHierarchyTree } from "./schematic-hierarchy-tree";
+import { useSchematicHierarchy } from "@/hooks/use-schematic-hierarchy";
 import { fetchApi } from "@/lib/api";
 import type { User } from "@/types/auth";
 import type { Comment, CommentContext } from "@/types/comments";
+import type { SchematicHierarchyNode } from "@/types/schematic-hierarchy";
 import type {
     CrossProbeContext,
     ECadViewerElement,
@@ -46,6 +49,10 @@ const CROSS_PROBE_RETRY_DELAY_MS = 120;
 type ViewerBlobSource = {
     filename: string;
     content: string;
+    // Per-instance title-block metadata for flattened schematic blobs.
+    sheetNumber?: string;
+    sheetCount?: string;
+    sheetPath?: string;
 };
 
 const buildViewerKey = (
@@ -91,9 +98,15 @@ function EcadViewerHost({ viewerKey, sources, setViewerRef }: EcadViewerHostProp
                 const blob = document.createElement("ecad-blob") as HTMLElement & {
                     filename?: string;
                     content?: string;
+                    sheet_number?: string;
+                    sheet_count?: string;
+                    sheet_path?: string;
                 };
                 blob.filename = source.filename;
                 blob.content = source.content;
+                if (source.sheetNumber !== undefined) blob.sheet_number = source.sheetNumber;
+                if (source.sheetCount !== undefined) blob.sheet_count = source.sheetCount;
+                if (source.sheetPath !== undefined) blob.sheet_path = source.sheetPath;
                 activeViewer.appendChild(blob);
             }
 
@@ -141,8 +154,21 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
     }, []);
 
     const [activeTab, setActiveTab] = useState<VisualizerTab>("sch");
-    const [schematicContent, setSchematicContent] = useState<string | null>(null);
-    const [subsheets, setSubsheets] = useState<{ filename: string, content: string }[]>([]);
+    // One pre-annotated .kicad_sch blob per sheet instance (from /schematic/flattened):
+    // this is what makes the viewer render correct per-instance reference designators.
+    const [schematicBlobs, setSchematicBlobs] = useState<
+        {
+            filename: string;
+            sheetPath: string;
+            content: string;
+            isRoot?: boolean;
+            sheetNumber?: string | number | null;
+            sheetCount?: string | number | null;
+            sheetPathLabel?: string | null;
+        }[]
+    >([]);
+    // Project's custom drawing-sheet (.kicad_wks) template text, if any.
+    const [drawingSheet, setDrawingSheet] = useState<string | null>(null);
     const [pcbContent, setPcbContent] = useState<string | null>(null);
     const [modelUrl, setModelUrl] = useState<string | null>(null);
     const [ibomUrl, setIbomUrl] = useState<string | null>(null);
@@ -177,6 +203,12 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
         SCH: 0,
         PCB: 0,
     });
+    // "Open datasheet" feature: the datasheet URL of the currently-selected
+    // schematic symbol (null if the selection has none or isn't a symbol), plus
+    // when that selection last fired. The double-click trigger uses the timestamp
+    // as a freshness guard (see the datasheet effect below).
+    const selectedDatasheetUrlRef = useRef<string | null>(null);
+    const lastSchematicSelectAtRef = useRef<number>(0);
     const activeCommentContext: CommentContext | null = activeTab === "sch" ? "SCH" : activeTab === "pcb" ? "PCB" : null;
 
     const applyCommentModeToViewer = useCallback((viewer: ECadViewerElement | null, enabled: boolean) => {
@@ -259,6 +291,71 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
         return findDesignator(item);
     }, [normalizeDesignator]);
 
+    // Pull a usable datasheet URL off a selected schematic symbol. The live item
+    // is a SchematicSymbol instance, which exposes `datasheet`,
+    // `get_property_text("Datasheet")`, and a `properties` Map — we probe all
+    // three defensively. KiCad stores "~" (or empty) to mean "no datasheet", and
+    // we only surface web URLs for opening in a new tab.
+    const extractDatasheetUrl = useCallback((item: unknown): string | null => {
+        const normalize = (value: unknown): string | null => {
+            if (typeof value !== "string") return null;
+            const trimmed = value.trim();
+            if (!trimmed || trimmed === "~") return null;
+            if (!/^https?:\/\//i.test(trimmed)) return null;
+            return trimmed;
+        };
+
+        const read = (value: unknown, depth = 0): string | null => {
+            if (!value || typeof value !== "object" || depth > 3) return null;
+            const entry = value as Record<string, unknown>;
+
+            const direct = normalize(entry.datasheet ?? entry.Datasheet);
+            if (direct) return direct;
+
+            if (typeof entry.get_property_text === "function") {
+                try {
+                    const fromProperty = normalize(
+                        (entry.get_property_text as (name: string) => unknown)("Datasheet")
+                    );
+                    if (fromProperty) return fromProperty;
+                } catch {
+                    // noop
+                }
+            }
+
+            const properties = entry.properties;
+            if (properties instanceof Map) {
+                const prop = properties.get("Datasheet");
+                if (prop && typeof prop === "object") {
+                    const propEntry = prop as Record<string, unknown>;
+                    const fromMap = normalize(
+                        propEntry.text ?? propEntry.shown_text ?? propEntry.value
+                    );
+                    if (fromMap) return fromMap;
+                }
+            }
+
+            return read(entry.item, depth + 1) || read(entry.parent, depth + 1);
+        };
+
+        return read(item);
+    }, []);
+
+    const openDatasheet = useCallback((url: string | null) => {
+        if (!url) return;
+        // Anchor click rather than window.open(...features): Firefox's popup
+        // blocker rejects window.open() with a feature string. A <a target=
+        // "_blank"> click during a user gesture is a link navigation, so it
+        // opens a tab reliably in both Firefox and Chrome.
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.target = "_blank";
+        anchor.rel = "noopener noreferrer";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+    }, []);
+
     const getCrossProbeTargetContext = useCallback(
         (sourceContext: CrossProbeContext): CrossProbeContext =>
             sourceContext === "SCH" ? "PCB" : "SCH",
@@ -295,6 +392,11 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
             }
 
             if (!runId || crossProbeRunIdRef.current[targetContext] !== runId) {
+                return;
+            }
+
+            if (typeof targetViewer.requestCrossProbe !== "function") {
+                clearCrossProbeRetry(targetContext);
                 return;
             }
 
@@ -344,12 +446,124 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
         return `${url}${url.includes("?") ? "&" : "?"}commit=${encodeURIComponent(commit)}`;
     }, [commit]);
 
+    // --- Schematic hierarchy navigation ---
+    const { data: hierarchy, loading: hierarchyLoading, error: hierarchyError } =
+        useSchematicHierarchy(projectId, commit, activeTab === "sch");
+    const [showHierarchy, setShowHierarchy] = useState(true);
+    const [nav, setNav] = useState<{ stack: string[]; index: number }>({ stack: [], index: -1 });
+    const suppressDriveRef = useRef(false);
+    const lastDrivenRef = useRef<string | null>(null);
+
+    const rootSheetPath = hierarchy?.root.sheetPath ?? null;
+
+    const parentByPath = useMemo(() => {
+        const parentMap = new Map<string, string>();
+        const walk = (node: SchematicHierarchyNode, parent: SchematicHierarchyNode | null) => {
+            if (parent) parentMap.set(node.sheetPath, parent.sheetPath);
+            node.children.forEach((child) => walk(child, node));
+        };
+        if (hierarchy?.root) walk(hierarchy.root, null);
+        return parentMap;
+    }, [hierarchy]);
+
+    // Each flattened blob carries its sheetPath + the synthetic filename the viewer
+    // keys on, so navigation maps a specific instance to its own annotated page.
+    const { blobFilenameByPath, blobPathByFilename } = useMemo(() => {
+        const byPath = new Map<string, string>();
+        const byFilename = new Map<string, string>();
+        for (const blob of schematicBlobs) {
+            byPath.set(blob.sheetPath, blob.filename);
+            byFilename.set(blob.filename, blob.sheetPath);
+        }
+        return { blobFilenameByPath: byPath, blobPathByFilename: byFilename };
+    }, [schematicBlobs]);
+
+    // Map a hierarchy sheet-path to the synthetic per-instance page id the viewer loads.
+    const pageIdForSheetPath = useCallback((sheetPath: string): string | null => {
+        if (!rootSheetPath) return null;
+        return blobFilenameByPath.get(sheetPath) ?? "root.kicad_sch";
+    }, [rootSheetPath, blobFilenameByPath]);
+
+    const sheetPathForPageId = useCallback((pageId: string): string | null => {
+        if (!hierarchy?.root) return null;
+        if (blobPathByFilename.has(pageId)) return blobPathByFilename.get(pageId)!;
+        // Fallback: the viewer may report a basename or "root".
+        const base = pageId.split("/").pop() || pageId;
+        if (base === "root.kicad_sch" || base === "root") return hierarchy.root.sheetPath;
+        return blobPathByFilename.get(base) ?? null;
+    }, [hierarchy, blobPathByFilename]);
+
+    // Keep a stable ref so the (comment/sheet) listener effect need not depend on it.
+    const sheetPathForPageIdRef = useRef(sheetPathForPageId);
+    useEffect(() => { sheetPathForPageIdRef.current = sheetPathForPageId; }, [sheetPathForPageId]);
+
+    const activeSheetPath = nav.index >= 0 ? nav.stack[nav.index] : (rootSheetPath ?? "");
+    const canGoBack = nav.index > 0;
+    const canGoForward = nav.index >= 0 && nav.index < nav.stack.length - 1;
+    const canGoUp = Boolean(parentByPath.get(activeSheetPath));
+
+    const pushNav = useCallback((sheetPath: string) => {
+        setNav((prev) => {
+            if (prev.index >= 0 && prev.stack[prev.index] === sheetPath) return prev;
+            const base = prev.stack.slice(0, prev.index + 1);
+            return { stack: [...base, sheetPath], index: base.length };
+        });
+    }, []);
+
+    const driveViewer = useCallback((sheetPath: string) => {
+        const pageId = pageIdForSheetPath(sheetPath);
+        if (!pageId) return;
+        if (lastDrivenRef.current === pageId) return;
+        lastDrivenRef.current = pageId;
+        const viewer = schematicViewerRef.current;
+        if (viewer?.switchPage) {
+            try { viewer.switchPage(pageId); } catch (err) { console.warn("switchPage failed", err); }
+        }
+        setActivePage(pageId);
+    }, [pageIdForSheetPath]);
+
+    // Initialize navigation to the root once the hierarchy resolves.
+    useEffect(() => {
+        if (hierarchy?.root && nav.index === -1) {
+            suppressDriveRef.current = true; // viewer already shows the root
+            lastDrivenRef.current = "root.kicad_sch";
+            setNav({ stack: [hierarchy.root.sheetPath], index: 0 });
+        }
+    }, [hierarchy, nav.index]);
+
+    // Drive the viewer when the active sheet changes via user/history navigation
+    // (but not when the change originated from a viewer sheet-loaded event).
+    useEffect(() => {
+        if (activeTab !== "sch") return;
+        if (nav.index < 0) return;
+        if (suppressDriveRef.current) { suppressDriveRef.current = false; return; }
+        driveViewer(activeSheetPath);
+    }, [activeSheetPath, activeTab, nav.index, driveViewer]);
+
+    const handleHierarchySelect = useCallback((node: SchematicHierarchyNode) => {
+        setActiveTab("sch");
+        pushNav(node.sheetPath);
+    }, [pushNav]);
+
+    const handleNavUp = useCallback(() => {
+        const parent = parentByPath.get(activeSheetPath);
+        if (parent) pushNav(parent);
+    }, [parentByPath, activeSheetPath, pushNav]);
+
+    const handleNavBack = useCallback(() => {
+        setNav((prev) => (prev.index > 0 ? { ...prev, index: prev.index - 1 } : prev));
+    }, []);
+
+    const handleNavForward = useCallback(() => {
+        setNav((prev) => (prev.index < prev.stack.length - 1 ? { ...prev, index: prev.index + 1 } : prev));
+    }, []);
+
     useEffect(() => {
         setModelUrl(null);
         setIbomUrl(null);
-        setSchematicContent(null);
+        setSchematicBlobs([]);
+        setDrawingSheet(null);
         setPcbContent(null);
-        setSubsheets([]);
         setSchematicContentLoaded(false);
         setPcbContentLoaded(false);
     }, [projectId, commit]);
@@ -456,53 +670,19 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
             const loadSchematic = async () => {
                 try {
                     const baseUrl = `/api/projects/${projectId}`;
+                    // One request returns every sheet instance as a pre-annotated blob,
+                    // with correct per-instance reference designators baked in.
+                    const res = await fetch(appendCommit(`${baseUrl}/schematic/flattened`), { signal });
 
-                    const [schRes, subsheetsRes] = await Promise.allSettled([
-                        fetch(appendCommit(`${baseUrl}/schematic`), { signal }),
-                        fetch(appendCommit(`${baseUrl}/schematic/subsheets`), { signal })
-                    ]);
-
-                    // Handle Schematic
-                    if (schRes.status === "fulfilled" && schRes.value.ok) {
-                        const schematicText = await schRes.value.text();
+                    if (res.ok) {
+                        const data = await res.json();
                         if (signal.aborted) return;
-                        setSchematicContent(schematicText);
+                        setSchematicBlobs(Array.isArray(data.blobs) ? data.blobs : []);
+                        setDrawingSheet(typeof data.drawingSheet === "string" ? data.drawingSheet : null);
                     } else {
                         console.error("Schematic not found");
-                        setSchematicContent(null);
-                    }
-
-                    // Handle Subsheets
-                    if (subsheetsRes.status === "fulfilled" && subsheetsRes.value.ok) {
-                        const data = await subsheetsRes.value.json();
-                        if (signal.aborted) return;
-                        if (data.files?.length) {
-                            const subsheetResults = await Promise.allSettled(data.files.map(async (f: any) => {
-                                const cRes = await fetch(f.url, { signal });
-                                if (!cRes.ok) {
-                                    throw new Error(`Failed to load subsheet: ${f.url}`);
-                                }
-                                let filename = f.name || f.path || f.url.split("/")?.pop() || "subsheet.kicad_sch";
-                                if (!filename.endsWith('.kicad_sch')) filename += '.kicad_sch';
-                                if (!filename.includes("/") && f.url.includes("Subsheets")) filename = `Subsheets/${filename}`;
-                                return { filename, content: await cRes.text() };
-                            }));
-
-                            if (signal.aborted) return;
-
-                            const loadedSubsheets = subsheetResults
-                                .filter((result): result is PromiseFulfilledResult<{ filename: string; content: string }> => result.status === "fulfilled")
-                                .map((result) => result.value);
-                            setSubsheets(loadedSubsheets);
-
-                            subsheetResults
-                                .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-                                .forEach((result) => {
-                                    console.warn("Failed to load one subsheet", result.reason);
-                                });
-                        }
-                    } else {
-                        setSubsheets([]);
+                        setSchematicBlobs([]);
+                        setDrawingSheet(null);
                     }
                 } catch (err) {
                     if (!isAbortError(err)) {
@@ -559,14 +739,18 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
     useEffect(() => {
         setSchematicContentLoaded(false);
         setPcbContentLoaded(false);
-        setSchematicContent(null);
-        setSubsheets([]);
+        setSchematicBlobs([]);
+        setDrawingSheet(null);
         setPcbContent(null);
         setModelUrl(null);
         setIbomUrl(null);
         setComments([]);
         setCommentsSourceUrls(null);
         setActivePage("root.kicad_sch");
+        setNav({ stack: [], index: -1 });
+        setShowHierarchy(true);
+        suppressDriveRef.current = false;
+        lastDrivenRef.current = null;
         setCommentMode(false);
         setShowCommentForm(false);
         setShowCommentPanel(false);
@@ -582,6 +766,8 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
         clearCrossProbeRetry("SCH");
         clearCrossProbeRetry("PCB");
         crossProbeRunIdRef.current = { SCH: 0, PCB: 0 };
+        selectedDatasheetUrlRef.current = null;
+        lastSchematicSelectAtRef.current = 0;
     }, [projectId, clearCrossProbeRetry]);
 
     useEffect(() => {
@@ -617,9 +803,28 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
         };
 
         const handleSheetLoad = (e: CustomEvent) => {
-            if (typeof e.detail === 'string') setActivePage(e.detail);
-            else if (e.detail?.filename) setActivePage(e.detail.filename);
-            else if (e.detail?.sheetName) setActivePage(e.detail.sheetName);
+            let pageId: string | null = null;
+            if (typeof e.detail === 'string') pageId = e.detail;
+            else if (e.detail?.filename) pageId = e.detail.filename;
+            else if (e.detail?.sheetName) pageId = e.detail.sheetName;
+            if (!pageId) return;
+            // Selection doesn't survive a sheet change; drop any stale datasheet
+            // so "D" can't open a symbol that's no longer on screen.
+            selectedDatasheetUrlRef.current = null;
+            lastSchematicSelectAtRef.current = 0;
+            setActivePage(pageId);
+            lastDrivenRef.current = pageId;
+            // Sync the hierarchy panel/history to a page change that originated in the
+            // viewer (e.g. double-click-to-enter), without re-driving the viewer.
+            const sheetPath = sheetPathForPageIdRef.current(pageId);
+            if (sheetPath) {
+                setNav((prev) => {
+                    if (prev.index >= 0 && prev.stack[prev.index] === sheetPath) return prev;
+                    suppressDriveRef.current = true;
+                    const base = prev.stack.slice(0, prev.index + 1);
+                    return { stack: [...base, sheetPath], index: base.length };
+                });
+            }
         };
 
         // Add listeners to both viewers
@@ -677,8 +882,9 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
     }, [activeTab, commentMode, applyCommentModeToViewer]);
 
     useEffect(() => {
-        schematicViewerRef.current?.setCrossProbeEnabled(true);
-        pcbViewerRef.current?.setCrossProbeEnabled(true);
+        // Cross-probe is optional: some viewer bundle versions don't expose it.
+        schematicViewerRef.current?.setCrossProbeEnabled?.(true);
+        pcbViewerRef.current?.setCrossProbeEnabled?.(true);
     }, [schematicViewerElement, pcbViewerElement]);
 
     useEffect(() => {
@@ -699,8 +905,14 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
             runCrossProbe(targetViewer, sourceContext, designator);
         };
 
-        const onSchematicSelect = (event: Event) =>
+        const onSchematicSelect = (event: Event) => {
+            // Track the selected symbol's datasheet for the "D" / double-click
+            // open triggers. The timestamp is the double-click freshness guard.
+            const detail = (event as CustomEvent<KiCanvasSelectDetail>).detail;
+            selectedDatasheetUrlRef.current = extractDatasheetUrl(detail?.item);
+            lastSchematicSelectAtRef.current = Date.now();
             handleCrossProbeSelection("SCH", pcbViewerRef.current, event);
+        };
         const onPcbSelect = (event: Event) =>
             handleCrossProbeSelection("PCB", schematicViewerRef.current, event);
 
@@ -711,7 +923,52 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
             schematicViewer?.removeEventListener("kicanvas:select", onSchematicSelect as EventListener);
             pcbViewer?.removeEventListener("kicanvas:select", onPcbSelect as EventListener);
         };
-    }, [schematicViewerElement, pcbViewerElement, extractDesignatorFromSelection, runCrossProbe]);
+    }, [schematicViewerElement, pcbViewerElement, extractDesignatorFromSelection, extractDatasheetUrl, runCrossProbe]);
+
+    // Open the selected symbol's datasheet in a new tab: press "D", or
+    // double-click the symbol. Both act on the schematic tab only.
+    useEffect(() => {
+        const schematicViewer = schematicViewerElement;
+
+        // First click of a double-click re-fires selection on the item under the
+        // cursor, so a selection within this window means the cursor is genuinely
+        // over a symbol. Empty-space double-clicks fire no selection (the viewer
+        // only emits select when an item is hit), so the timestamp stays stale.
+        const DOUBLE_CLICK_FRESH_MS = 500;
+
+        const isEditableTarget = (target: EventTarget | null): boolean => {
+            const el = target as HTMLElement | null;
+            if (!el || typeof el.tagName !== "string") return false;
+            const tag = el.tagName.toLowerCase();
+            return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
+        };
+
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== "d" && event.key !== "D") return;
+            if (event.ctrlKey || event.metaKey || event.altKey) return;
+            if (activeTab !== "sch") return;
+            if (isEditableTarget(event.target)) return;
+            const url = selectedDatasheetUrlRef.current;
+            if (!url) return;
+            event.preventDefault();
+            openDatasheet(url);
+        };
+
+        const onDblClick = () => {
+            const url = selectedDatasheetUrlRef.current;
+            if (!url) return;
+            if (Date.now() - lastSchematicSelectAtRef.current > DOUBLE_CLICK_FRESH_MS) return;
+            openDatasheet(url);
+        };
+
+        document.addEventListener("keydown", onKeyDown);
+        schematicViewer?.addEventListener("dblclick", onDblClick);
+
+        return () => {
+            document.removeEventListener("keydown", onKeyDown);
+            schematicViewer?.removeEventListener("dblclick", onDblClick);
+        };
+    }, [schematicViewerElement, activeTab, openDatasheet]);
 
     useEffect(() => {
         if (activeTab === "pcb" && lastCrossProbeRef.current.SCH) {
@@ -872,14 +1129,25 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
     });
 
     const shouldShowOverlay =
-        (activeTab === "sch" && Boolean(schematicContent && schematicViewerElement)) ||
+        (activeTab === "sch" && Boolean(schematicBlobs.length && schematicViewerElement)) ||
         (activeTab === "pcb" && Boolean(pcbContent && pcbViewerElement));
-    const schematicSources = useMemo<ViewerBlobSource[]>(
-        () => (schematicContent
-            ? [{ filename: "root.kicad_sch", content: schematicContent }, ...subsheets]
-            : []),
-        [schematicContent, subsheets],
-    );
+    const schematicSources = useMemo<ViewerBlobSource[]>(() => {
+        const sources: ViewerBlobSource[] = schematicBlobs.map(
+            ({ filename, content, sheetNumber, sheetCount, sheetPathLabel }) => ({
+                filename,
+                content,
+                sheetNumber: sheetNumber != null ? String(sheetNumber) : undefined,
+                sheetCount: sheetCount != null ? String(sheetCount) : undefined,
+                sheetPath: sheetPathLabel != null ? String(sheetPathLabel) : undefined,
+            }),
+        );
+        // The project's custom drawing-sheet template travels as its own blob so
+        // the viewer renders the project's frame/title block instead of the default.
+        if (drawingSheet) {
+            sources.push({ filename: "prism-worksheet.kicad_wks", content: drawingSheet });
+        }
+        return sources;
+    }, [schematicBlobs, drawingSheet]);
     const pcbSources = useMemo<ViewerBlobSource[]>(
         () => (pcbContent
             ? [{ filename: "board.kicad_pcb", content: pcbContent }]
@@ -918,6 +1186,56 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
                         </Button>
                     );
                 })}
+
+                {/* Schematic hierarchy navigation */}
+                {activeTab === "sch" && (
+                    <>
+                        <div className="mx-1 h-5 w-px bg-border" />
+                        <Button
+                            variant={showHierarchy ? "secondary" : "ghost"}
+                            size="sm"
+                            onClick={() => setShowHierarchy((v) => !v)}
+                            className="text-xs h-8"
+                            title="Toggle schematic hierarchy"
+                        >
+                            <ListTree className="w-3 h-3 mr-2" />
+                            Hierarchy
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={handleNavBack}
+                            disabled={!canGoBack}
+                            className="h-8 w-8"
+                            title="Back"
+                            aria-label="Back"
+                        >
+                            <ArrowLeft className="w-4 h-4" />
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={handleNavUp}
+                            disabled={!canGoUp}
+                            className="h-8 w-8"
+                            title="Up a sheet"
+                            aria-label="Up a sheet"
+                        >
+                            <ArrowUp className="w-4 h-4" />
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={handleNavForward}
+                            disabled={!canGoForward}
+                            className="h-8 w-8"
+                            title="Forward"
+                            aria-label="Forward"
+                        >
+                            <ArrowRight className="w-4 h-4" />
+                        </Button>
+                    </>
+                )}
                 <div className="flex-1" />
 
                 {/* Comment Controls */}
@@ -1130,6 +1448,38 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
                 {activeTab === "ibom" && (
                     <div className="absolute inset-0 z-20 bg-white">
                         {ibomUrl ? <iframe src={ibomUrl} className="w-full h-full border-0" /> : <div className="p-10">No iBoM Found</div>}
+                    </div>
+                )}
+
+                {/* Schematic Hierarchy Panel */}
+                {activeTab === "sch" && showHierarchy && (
+                    <div className="absolute top-0 left-0 bottom-0 z-40 flex w-64 flex-col border-r bg-background/95 backdrop-blur">
+                        <div className="flex items-center justify-between border-b px-2 py-1">
+                            <span className="text-xs font-semibold">Schematic Hierarchy</span>
+                            <button
+                                type="button"
+                                onClick={() => setShowHierarchy(false)}
+                                className="text-muted-foreground hover:text-foreground"
+                                aria-label="Close schematic hierarchy"
+                            >
+                                <X className="h-3 w-3" />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-auto p-1">
+                            {hierarchy?.root ? (
+                                <SchematicHierarchyTree
+                                    root={hierarchy.root}
+                                    activeSheetPath={activeSheetPath}
+                                    onSelect={handleHierarchySelect}
+                                />
+                            ) : hierarchyLoading ? (
+                                <p className="p-2 text-xs text-muted-foreground">Loading hierarchy…</p>
+                            ) : hierarchyError ? (
+                                <p className="p-2 text-xs text-destructive">{hierarchyError}</p>
+                            ) : (
+                                <p className="p-2 text-xs text-muted-foreground">No schematic hierarchy.</p>
+                            )}
+                        </div>
                     </div>
                 )}
 

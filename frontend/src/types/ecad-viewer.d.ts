@@ -51,9 +51,10 @@ export interface ECadViewerElement extends HTMLElement {
     zoomToLocation(x: number, y: number): void;
     switchPage(pageId: string): void;
     getScreenLocation(x: number, y: number): { x: number; y: number } | null;
-    setCrossProbeEnabled(enabled: boolean): void;
-    isCrossProbeEnabled(): boolean;
-    requestCrossProbe(request: CrossProbeRequest): CrossProbeResult;
+    // Cross-probe API is not present in all vendored bundle versions.
+    setCrossProbeEnabled?(enabled: boolean): void;
+    isCrossProbeEnabled?(): boolean;
+    requestCrossProbe?(request: CrossProbeRequest): CrossProbeResult;
 }
 
 declare global {

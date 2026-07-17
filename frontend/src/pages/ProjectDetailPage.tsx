@@ -78,7 +78,7 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
     const [project, setProject] = useState<Project | null>(null);
     const [readme, setReadme] = useState<string>("");
     const [loading, setLoading] = useState(true);
-    const [activeSection, setActiveSection] = useState<Section>("overview");
+    const [activeSection, setActiveSection] = useState<Section>("visualizers");
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
     const [sidebarHovered, setSidebarHovered] = useState(false);
     const [searchParams, setSearchParams] = useSearchParams();
