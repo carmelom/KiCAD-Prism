@@ -192,7 +192,17 @@ class Settings(BaseSettings):
         description=(
             "Default base URL used to generate KiCad comments REST URLs "
             "for project import and visualizer helpers. "
-            "If empty, URL helpers derive host from the incoming request."
+            "If empty, URL helpers derive host from PUBLIC_BASE_URL or the incoming request."
+        ),
+    )
+
+    PUBLIC_BASE_URL: str = Field(
+        default="",
+        description=(
+            "Canonical public origin for absolute URLs (Remote Symbols metadata, OAuth, "
+            "and other request-derived links) when Prism sits behind a reverse proxy. "
+            "Example: https://prism.example.com. If empty, helpers use forwarded headers "
+            "or request.base_url."
         ),
     )
 

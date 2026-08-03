@@ -19,7 +19,10 @@ FROM nginx:alpine
 # Copy built assets from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Copy custom nginx config for SPA routing and API proxy
+# Copy custom nginx config for SPA routing and API proxy.
+# Map lives in a separate conf.d file (http context) so $prism_forwarded_proto
+# can prefer the outer X-Forwarded-Proto over the internal HTTP $scheme.
+COPY nginx-forwarded-map.conf /etc/nginx/conf.d/00-forwarded-map.conf
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Expose port 80

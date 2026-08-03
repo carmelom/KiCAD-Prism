@@ -1,0 +1,102 @@
+name: Bug report
+description: Report reproducible incorrect behavior in KiCAD Prism
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. Do not include credentials, private repositories, proprietary designs, database dumps, or security vulnerabilities.
+
+  - type: input
+    id: version
+    attributes:
+      label: Prism version
+      description: Release tag or full commit SHA
+      placeholder: v3.0.0-alpha.1 or abcdef123...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Deployment or upgrade
+        - Authentication or access
+        - Workspace or Git import
+        - Schematic, PCB, 3D, BOM, or cross-probe
+        - Design Comparison
+        - Comments
+        - Workflows or Assets
+        - Library Manager
+        - Remote Symbol Provider
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Host OS, CPU architecture, Docker version, browser, KiCad version, and authentication mode as relevant
+      placeholder: |
+        Host: Ubuntu 24.04, amd64
+        Docker: 28.x / Compose v2.x
+        Browser: Firefox ...
+        KiCad: 10.0.x
+        Auth: OIDC
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Use a small public project or sanitized example when possible
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Remove tokens, cookies, private URLs, identities, and design data
+      render: shell
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched existing open and closed issues.
+          required: true
+        - label: I removed secrets and proprietary data.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

@@ -9,12 +9,13 @@ from app.core.config import settings
 from app.core.session import create_session_token, set_session_cookie
 from app.core.security import get_current_user
 from app.services import provider_auth_service
+from app.services.public_url_service import resolve_public_base_url
 
 router = APIRouter()
 
 
 def _base_url(request: Request) -> str:
-    return str(request.base_url).rstrip("/")
+    return resolve_public_base_url(request)
 
 
 def _require_provider_auth() -> None:

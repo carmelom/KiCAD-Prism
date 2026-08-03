@@ -7,6 +7,7 @@ from __future__ import annotations
 from fastapi import Request
 
 from app.core.config import settings
+from app.services.public_url_service import resolve_public_base_url
 
 
 def _normalize_base_url(base_url: str | None) -> str:
@@ -29,18 +30,14 @@ def resolve_comments_base_url(
     Precedence:
     1. Explicit endpoint query override.
     2. COMMENTS_API_BASE_URL from environment.
-    3. Incoming request host/protocol (works for LAN IP access).
+    3. PUBLIC_BASE_URL / forwarded headers / request.base_url
+       (via resolve_public_base_url).
     """
     normalized = _normalize_base_url(explicit_base_url)
     if normalized:
         return normalized
 
-    forwarded_proto = request.headers.get("x-forwarded-proto")
-    forwarded_host = request.headers.get("x-forwarded-host")
-    if forwarded_proto and forwarded_host:
-        return f"{forwarded_proto}://{forwarded_host}".rstrip("/")
-
-    return str(request.base_url).rstrip("/")
+    return resolve_public_base_url(request)
 
 
 def build_comments_source_urls(project_id: str, base_url: str | None = None) -> dict:

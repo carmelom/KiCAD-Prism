@@ -228,7 +228,12 @@ If your production deployment is HTTPS, also set:
 
 ```env
 SESSION_COOKIE_SECURE=true
+PUBLIC_BASE_URL=https://your-domain.example
 ```
+
+`PUBLIC_BASE_URL` is the hard override for absolute URLs advertised to KiCad (Remote Symbols
+metadata and OAuth endpoints). Prefer it whenever Prism sits behind a reverse proxy. See
+[HTTPS and TLS](HTTPS_AND_TLS.md).
 
 ## Reverse Proxy for Office/VPN Hosting
 
@@ -237,8 +242,8 @@ database and `.kicad-prism/components` asset directory on the workstation's loca
 place either path on NFS/SMB/network storage; SQLite WAL mode is designed for local filesystems.
 
 If the external reverse proxy points at the frontend container, the bundled frontend Nginx config
-already forwards KiCad/API paths to the backend. If the external reverse proxy routes directly to
-individual containers, use these path rules:
+already forwards KiCad/API paths to the backend and preserves outer `X-Forwarded-Proto` when present.
+If the external reverse proxy routes directly to individual containers, use these path rules:
 
 - `/` to the frontend container
 - `/api/*` to the backend container
@@ -253,11 +258,17 @@ CORS_ORIGINS_STR=http://kicad-prism.example.internal
 SESSION_COOKIE_SECURE=false
 ```
 
-For HTTPS, use the HTTPS origin and set `SESSION_COOKIE_SECURE=true`.
+For HTTPS:
 
-The proxy must preserve the original `Host` header so provider metadata advertises the public
-office/VPN URL instead of the backend container name. Enable gzip or Brotli compression at the
-proxy for JSON responses and static panel assets.
+```env
+CORS_ORIGINS_STR=https://kicad-prism.example.internal
+SESSION_COOKIE_SECURE=true
+PUBLIC_BASE_URL=https://kicad-prism.example.internal
+```
+
+The proxy must preserve the original `Host` header and set `X-Forwarded-Proto: https` so provider
+metadata advertises the public office/VPN URL instead of the backend container name. Enable gzip or
+Brotli compression at the proxy for JSON responses and static panel assets.
 
 ## Private Repository Access
 

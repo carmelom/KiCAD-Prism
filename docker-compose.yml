@@ -44,6 +44,8 @@ services:
       - SESSION_TTL_HOURS=${SESSION_TTL_HOURS:-12}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-false}
       - CORS_ORIGINS_STR=${CORS_ORIGINS_STR:-http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:8080,http://localhost:8080}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
+      - COMMENTS_API_BASE_URL=${COMMENTS_API_BASE_URL:-}
       # Set to false to disable authentication entirely
       - AUTH_ENABLED=${AUTH_ENABLED:-true}
       # Development mode (set to false for production/bundling)

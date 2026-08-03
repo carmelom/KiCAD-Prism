@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Setup and workflow questions
+    url: https://github.com/krishna-swaroop/KiCAD-Prism/discussions
+    about: Ask for help or discuss a workflow before filing a defect.
+  - name: Security vulnerability
+    url: https://github.com/krishna-swaroop/KiCAD-Prism/security/advisories/new
+    about: Report suspected vulnerabilities privately.
+  - name: Documentation
+    url: https://github.com/krishna-swaroop/KiCAD-Prism/blob/dev/docs/README.md
+    about: Read the current platform, deployment, team, and operations guides.

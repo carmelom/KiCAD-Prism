@@ -38,6 +38,34 @@ Search is backed by SQLite FTS5 when the runtime SQLite build supports it. FTS i
 database triggers on component revisions. If FTS5 is unavailable, Prism logs a warning and falls
 back to `LIKE` search so the provider remains functional.
 
+## HTTPS and public origin
+
+For any non-loopback deployment used by desktop KiCad, serve Prism over HTTPS. Metadata, panel,
+OAuth, and asset URLs are absolute and must match the public origin.
+
+When Prism sits behind a reverse proxy, set:
+
+```env
+PUBLIC_BASE_URL=https://prism.example.com
+SESSION_COOKIE_SECURE=true
+CORS_ORIGINS_STR=https://prism.example.com
+```
+
+`PUBLIC_BASE_URL` overrides request-derived origins for Remote Symbols discovery and OAuth
+metadata. If unset, Prism uses `X-Forwarded-Proto` / `X-Forwarded-Host` (or `Host`) and finally
+`request.base_url`.
+
+Verify before opening KiCad:
+
+```bash
+curl -fsS https://prism.example.com/.well-known/kicad-remote-provider | jq '{api_base_url, panel_url, auth}'
+curl -fsS https://prism.example.com/oauth/.well-known/oauth-authorization-server | jq '{issuer, authorization_endpoint, token_endpoint}'
+```
+
+Every advertised URL must start with `https://prism.example.com`.
+
+Full reverse-proxy notes: [HTTPS and TLS](HTTPS_AND_TLS.md) and [Deployment](DEPLOYMENT.md).
+
 ## Running locally
 
 1. Start the Prism backend.

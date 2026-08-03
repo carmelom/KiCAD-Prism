@@ -1,0 +1,72 @@
+name: Feature request
+description: Propose an engineering workflow or product improvement
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the workflow and outcome before prescribing an implementation. Large proposals may be moved to a discussion.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Workflow problem
+      description: Who is affected, what are they trying to accomplish, and where does the current process fail?
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current workaround
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable acceptance criteria
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Product area
+      options:
+        - Project review
+        - Git integration
+        - Workflows or Assets
+        - Library governance
+        - Remote Symbol Provider
+        - Authentication or administration
+        - Deployment or operations
+        - Developer experience
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Mockups and public example repositories are welcome; do not attach proprietary data.
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched existing issues and discussions.
+          required: true
+        - label: I described the user workflow and acceptance outcome.
+          required: true
