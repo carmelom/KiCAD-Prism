@@ -4,6 +4,8 @@
 
 # Environment Files
 .env
+stack.env
+docker-compose.portainer.yml
 #.env.example
 
 # Backend
